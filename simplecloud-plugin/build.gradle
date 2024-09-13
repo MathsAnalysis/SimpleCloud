@@ -1,4 +1,6 @@
-/*
+plugins {
+    id 'org.jetbrains.kotlin.jvm'
+}/*
  * MIT License
  *
  * Copyright (C) 2020 The SimpleCloud authors
@@ -35,6 +37,7 @@ dependencies {
 
     api('net.kyori:adventure-text-minimessage:4.14.0')
     api('net.kyori:adventure-platform-bungeecord:4.1.2')
+    implementation "org.jetbrains.kotlin:kotlin-stdlib-jdk8"
 }
 
 shadowJar {
@@ -46,4 +49,10 @@ shadowJar {
 
 jar {
     dependsOn ':simplecloud-client:jar'
+}
+repositories {
+    mavenCentral()
+}
+kotlin {
+    jvmToolchain(8)
 }

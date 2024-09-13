@@ -1,4 +1,6 @@
-/*
+plugins {
+    id 'org.jetbrains.kotlin.jvm'
+}/*
  * MIT License
  *
  * Copyright (C) 2020 The SimpleCloud authors
@@ -53,6 +55,7 @@ dependencies {
     testApi group: 'org.jetbrains.kotlinx', name: 'kotlinx-coroutines-core', version: dependencyKotlinCouroutinesVersion
     testApi group: 'com.google.code.gson', name: 'gson', version: '2.10.1'
     testApi group: 'org.apache.commons', name: 'commons-lang3', version: '3.13.0'
+    implementation "org.jetbrains.kotlin:kotlin-stdlib-jdk8"
 
 }
 
@@ -67,4 +70,10 @@ jar {
                 'Implementation-Version': project.version,
         )
     }
+}
+repositories {
+    mavenCentral()
+}
+kotlin {
+    jvmToolchain(8)
 }

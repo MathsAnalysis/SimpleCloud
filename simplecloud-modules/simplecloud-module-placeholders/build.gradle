@@ -1,3 +1,6 @@
+plugins {
+    id 'org.jetbrains.kotlin.jvm'
+}
 shadowJar {
     archiveFileName.set("SimpleCloud-Placeholders.jar")
 }
@@ -6,6 +9,7 @@ repositories {
     maven {
         url "https://repo.extendedclip.com/content/repositories/placeholderapi/"
     }
+    mavenCentral()
 }
 
 dependencies {
@@ -20,5 +24,9 @@ dependencies {
     compileOnly 'org.spigotmc:spigot-api:1.19.2-R0.1-SNAPSHOT'
 
     compileOnly 'me.clip:placeholderapi:2.11.1'
+    implementation "org.jetbrains.kotlin:kotlin-stdlib-jdk8"
 
+}
+kotlin {
+    jvmToolchain(8)
 }

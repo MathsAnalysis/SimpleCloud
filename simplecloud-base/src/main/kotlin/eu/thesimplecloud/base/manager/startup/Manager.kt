@@ -65,6 +65,9 @@ import eu.thesimplecloud.launcher.startup.Launcher
 import kotlinx.coroutines.GlobalScope
 import kotlinx.coroutines.launch
 import java.io.File
+import java.io.IOException
+import java.net.InetSocketAddress
+import java.net.ServerSocket
 import java.util.logging.Level
 import java.util.logging.Logger
 import kotlin.concurrent.thread
@@ -86,6 +89,7 @@ class Manager : ICloudApplication {
     val cloudModuleHandler: IModuleHandler
     val appClassLoader: ApplicationClassLoader
     val encryption: AdvancedEncryption
+
 
     private val profileFile = ProfileFile()
 
@@ -145,12 +149,28 @@ class Manager : ICloudApplication {
         this.communicationServer.setPacketSearchClassLoader(baseAndLauncherLoader)
         this.communicationServer.setClassLoaderToSearchObjectPacketClasses(appClassLoader)
         this.communicationServer.setPacketClassConverter { moveToApplicationClassLoader(it) }
+
+
+        val port = launcherConfig.port
+
+        val availablePort = if (isPortAvailable(port)) {
+            port
+        } else {
+            var newPort = port + 1
+            while (!isPortAvailable(newPort)) {
+                newPort++
+            }
+            newPort
+        }
+
+
         this.templateServer = NettyServer<ICommandExecutable>(
             launcherConfig.host,
-            launcherConfig.port + 1,
+            availablePort,
             TemplateConnectionHandlerImpl(),
             ServerHandlerImpl()
         )
+
         this.templateServer.setAccessHandler(ManagerAccessHandler())
         this.templateServer.setPacketSearchClassLoader(baseAndLauncherLoader)
         this.templateServer.setClassLoaderToSearchObjectPacketClasses(appClassLoader)
@@ -264,6 +284,19 @@ class Manager : ICloudApplication {
             this.profileFile.create()
         } catch (e: Exception) {
             Launcher.instance.logger.warning("An error occurred while creating the profile file: ${e.message}")
+        }
+    }
+
+
+
+    private fun isPortAvailable(port: Int): Boolean {
+        return try {
+            ServerSocket().use { socket ->
+                socket.bind(InetSocketAddress("0.0.0.0", port))
+                true
+            }
+        } catch (e: IOException) {
+            false
         }
     }
 

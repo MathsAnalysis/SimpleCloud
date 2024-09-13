@@ -1,3 +1,6 @@
+plugins {
+    id 'org.jetbrains.kotlin.jvm'
+}
 repositories {
     mavenCentral()
 }
@@ -14,8 +17,12 @@ dependencies {
     testApi group: 'io.netty', name: 'netty-all', version: dependencyNettyVersion
     testApi group: 'org.jetbrains.kotlinx', name: 'kotlinx-coroutines-core', version: dependencyKotlinCouroutinesVersion
     testApi 'io.mockk:mockk:1.12.3'
+    implementation "org.jetbrains.kotlin:kotlin-stdlib-jdk8"
 }
 
 shadowJar {
     archiveFileName.set("SimpleCloud-ServiceSelection.jar")
+}
+kotlin {
+    jvmToolchain(8)
 }
