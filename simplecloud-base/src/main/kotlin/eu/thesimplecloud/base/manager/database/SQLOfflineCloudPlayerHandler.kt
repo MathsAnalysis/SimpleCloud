@@ -136,7 +136,6 @@ class SQLOfflineCloudPlayerHandler(private val databaseConnectionInformation: Da
     }
 
     override fun getRegisteredPlayerCount(): Int {
-
         getConnection().use { connection ->
             connection.prepareStatement("SELECT COUNT(*) FROM `$playerCollectionName`").use { statement ->
                 val resultSet = statement.executeQuery()
