@@ -1,9 +1,9 @@
 package eu.thesimplecloud.module.updater.api
 
-import eu.thesimplecloud.module.automanager.config.AutoManagerConfig
+import eu.thesimplecloud.module.updater.config.AutoManagerConfig
+import eu.thesimplecloud.module.updater.manager.AutoServerVersionManager
 import eu.thesimplecloud.module.updater.manager.PluginManager
 import eu.thesimplecloud.module.updater.manager.PluginUpdaterModule
-import eu.thesimplecloud.module.updater.manager.AutoServerVersionManager
 import eu.thesimplecloud.module.updater.manager.TemplateManager
 import eu.thesimplecloud.module.updater.thread.UpdateScheduler
 import kotlinx.coroutines.CoroutineScope
@@ -11,23 +11,25 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import java.util.concurrent.CompletableFuture
 
+typealias ServerVersionEntry = AutoServerVersionManager.ServerVersionEntry
+
 class AutoManagerAPI(private val module: PluginUpdaterModule) {
-    
+
     private val apiScope = CoroutineScope(Dispatchers.IO)
-    
+
     fun getConfig(): AutoManagerConfig = module.getConfig()
-    
-    fun getServerVersionManager(): AutoServerVersionManager = module.getServerVersionManager()
-    
+
+    fun getServerVersionManager() = module.getServerVersionManager()
+
     fun getPluginManager(): PluginManager = module.getPluginManager()
-    
+
     fun getTemplateManager(): TemplateManager = module.getTemplateManager()
-    
+
     fun getUpdateScheduler(): UpdateScheduler = module.getUpdateScheduler()
-    
-    fun forceUpdate(): CompletableFuture<Boolean> {
-        val future = CompletableFuture<Boolean>()
-        
+
+    fun forceUpdate(): java.util.concurrent.CompletableFuture<Boolean> {
+        val future = java.util.concurrent.CompletableFuture<Boolean>()
+
         apiScope.launch {
             try {
                 val result = module.runManualUpdate()
@@ -36,13 +38,13 @@ class AutoManagerAPI(private val module: PluginUpdaterModule) {
                 future.completeExceptionally(e)
             }
         }
-        
+
         return future
     }
-    
-    fun updateServerVersions(): CompletableFuture<Boolean> {
-        val future = CompletableFuture<Boolean>()
-        
+
+    fun updateServerVersions(): java.util.concurrent.CompletableFuture<Boolean> {
+        val future = java.util.concurrent.CompletableFuture<Boolean>()
+
         apiScope.launch {
             try {
                 val result = getServerVersionManager().updateAllVersions()
@@ -51,13 +53,13 @@ class AutoManagerAPI(private val module: PluginUpdaterModule) {
                 future.completeExceptionally(e)
             }
         }
-        
+
         return future
     }
-    
-    fun updatePlugins(): CompletableFuture<Boolean> {
-        val future = CompletableFuture<Boolean>()
-        
+
+    fun updatePlugins(): java.util.concurrent.CompletableFuture<Boolean> {
+        val future = java.util.concurrent.CompletableFuture<Boolean>()
+
         apiScope.launch {
             try {
                 val result = getPluginManager().updateAllPlugins()
@@ -66,13 +68,13 @@ class AutoManagerAPI(private val module: PluginUpdaterModule) {
                 future.completeExceptionally(e)
             }
         }
-        
+
         return future
     }
-    
-    fun syncTemplates(): CompletableFuture<Boolean> {
-        val future = CompletableFuture<Boolean>()
-        
+
+    fun syncTemplates(): java.util.concurrent.CompletableFuture<Boolean> {
+        val future = java.util.concurrent.CompletableFuture<Boolean>()
+
         apiScope.launch {
             try {
                 val result = getTemplateManager().syncAllTemplates()
@@ -81,32 +83,60 @@ class AutoManagerAPI(private val module: PluginUpdaterModule) {
                 future.completeExceptionally(e)
             }
         }
-        
+
         return future
     }
-    
+
+    fun ensurePluginsDownloaded(): java.util.concurrent.CompletableFuture<Boolean> {
+        val future = java.util.concurrent.CompletableFuture<Boolean>()
+
+        apiScope.launch {
+            try {
+                val result = getPluginManager().ensureAllPluginsDownloaded()
+                future.complete(result)
+            } catch (e: Exception) {
+                future.completeExceptionally(e)
+            }
+        }
+
+        return future
+    }
+
+    fun updateStaticServers(): java.util.concurrent.CompletableFuture<Boolean> {
+        val future = java.util.concurrent.CompletableFuture<Boolean>()
+
+        apiScope.launch {
+            try {
+                val result = getTemplateManager().syncStaticServersOnRestart()
+                future.complete(result)
+            } catch (e: Exception) {
+                future.completeExceptionally(e)
+            }
+        }
+
+        return future
+    }
+
     fun reloadConfig() {
         module.reloadConfig()
     }
-    
+
     fun isAutomationEnabled(): Boolean = getConfig().enableAutomation
-    
+
     fun isSchedulerRunning(): Boolean = getUpdateScheduler().isRunning()
-    
+
     fun getNextUpdateTime(): Long = getUpdateScheduler().getNextUpdateTime()
-    
-    fun getCurrentServerVersions(): List<AutoServerVersionManager.ServerVersionEntry> {
-        return getServerVersionManager().getCurrentVersions()
-    }
-    
+
+    fun getCurrentServerVersions() = getServerVersionManager().getCurrentVersions()
+
     fun isPluginEnabled(pluginName: String): Boolean {
         return getConfig().plugins.find { it.name.equals(pluginName, true) }?.enabled ?: false
     }
-    
+
     fun isServerSoftwareEnabled(software: String): Boolean {
         return getConfig().serverSoftware.contains(software.lowercase())
     }
-    
+
     fun getStats(): AutoManagerStats {
         return AutoManagerStats(
             isAutomationEnabled = isAutomationEnabled(),
@@ -123,7 +153,7 @@ class AutoManagerAPI(private val module: PluginUpdaterModule) {
             enableBackup = getConfig().enableBackup
         )
     }
-    
+
     data class AutoManagerStats(
         val isAutomationEnabled: Boolean,
         val isSchedulerRunning: Boolean,
@@ -138,7 +168,7 @@ class AutoManagerAPI(private val module: PluginUpdaterModule) {
         val enableNotifications: Boolean,
         val enableBackup: Boolean
     ) {
-        
+
         fun toMap(): Map<String, Any> = mapOf(
             "automation_enabled" to isAutomationEnabled,
             "scheduler_running" to isSchedulerRunning,
@@ -153,30 +183,18 @@ class AutoManagerAPI(private val module: PluginUpdaterModule) {
             "notifications" to enableNotifications,
             "backup" to enableBackup
         )
-        
+
         override fun toString(): String {
             return """
                 AutoManager Statistics:
-                - Automation: ${if (isAutomationEnabled) "✅ Enabled" else "❌ Disabled"}
-                - Scheduler: ${if (isSchedulerRunning) "🟢 Running" else "🔴 Stopped"}
+                - Automation: ${if (isAutomationEnabled) "Enabled" else "Disabled"}
+                - Scheduler: ${if (isSchedulerRunning) "Running" else "Stopped"}
                 - Update Interval: $updateInterval
                 - Configured Plugins: $configuredPlugins ($enabledPlugins enabled)
                 - Server Software: $configuredServerSoftware types
-                - Features: Server Updates:${if (enableServerVersionUpdates) "✅" else "❌"} | Plugin Updates:${if (enablePluginUpdates) "✅" else "❌"} | Template Sync:${if (enableTemplateSync) "✅" else "❌"}
-                - Other: Notifications:${if (enableNotifications) "✅" else "❌"} | Backup:${if (enableBackup) "✅" else "❌"}
+                - Features: Server Updates:${if (enableServerVersionUpdates) "Yes" else "No"} | Plugin Updates:${if (enablePluginUpdates) "Yes" else "No"} | Template Sync:${if (enableTemplateSync) "Yes" else "No"}
+                - Other: Notifications:${if (enableNotifications) "Yes" else "No"} | Backup:${if (enableBackup) "Yes" else "No"}
             """.trimIndent()
         }
-    }
-    
-    companion object {
-        @JvmStatic
-        fun getInstance(): AutoManagerAPI? {
-            return try {
-                PluginUpdaterModule.instance.getAPI()
-            } catch (e: Exception) {
-                null
-            }
-        }
-
     }
 }

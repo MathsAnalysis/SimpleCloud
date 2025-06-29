@@ -3,7 +3,7 @@ package eu.thesimplecloud.module.updater.manager
 import eu.thesimplecloud.api.CloudAPI
 import eu.thesimplecloud.api.directorypaths.DirectoryPaths
 import eu.thesimplecloud.jsonlib.JsonLib
-import eu.thesimplecloud.module.automanager.config.AutoManagerConfig
+import eu.thesimplecloud.module.updater.config.AutoManagerConfig
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -32,6 +32,8 @@ class PluginManager(
 
     suspend fun updateAllPlugins(): Boolean = withContext(Dispatchers.IO) {
         return@withContext try {
+            ensureAllPluginsDownloaded()
+
             val updatedPlugins = mutableMapOf<String, PluginInfo>()
             var hasErrors = false
 
@@ -335,6 +337,61 @@ class PluginManager(
         return hoursSinceModified > 24
     }
 
+    private fun findModuleFile(moduleName: String): File? {
+        val locations = listOf(
+            File(DirectoryPaths.paths.modulesPath + "auto-plugins/"),
+            File(DirectoryPaths.paths.modulesPath)
+        )
+
+        locations.forEach { location ->
+            if (location.exists()) {
+                location.walkTopDown().forEach { file ->
+                    if (file.isFile &&
+                        file.extension == "jar" &&
+                        file.nameWithoutExtension.contains(moduleName, true)) {
+                        return file
+                    }
+                }
+            }
+        }
+
+        return null
+    }
+
+    suspend fun ensureAllPluginsDownloaded(): Boolean = withContext(Dispatchers.IO) {
+        return@withContext try {
+            var success = true
+
+            config.plugins.filter { it.enabled }.forEach { pluginConfig ->
+                try {
+                    if (!isPluginAlreadyDownloaded(pluginConfig)) {
+                        val pluginInfo = updatePlugin(pluginConfig)
+                        if (pluginInfo != null) {
+                            downloadPluginFiles(pluginConfig.name, pluginInfo)
+                        } else {
+                            success = false
+                        }
+                    }
+                } catch (e: Exception) {
+                    success = false
+                }
+            }
+
+            success
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    private fun isPluginAlreadyDownloaded(pluginConfig: AutoManagerConfig.PluginConfig): Boolean {
+        return pluginConfig.platforms.any { platform ->
+            val platformDir = File(pluginsDirectory, "${pluginConfig.name}/$platform")
+            platformDir.exists() && platformDir.listFiles()?.any {
+                it.isFile && it.extension == "jar"
+            } == true
+        }
+    }
+
     private fun isValidJarFile(file: File): Boolean {
         return try {
             val bytes = file.readBytes()
@@ -370,7 +427,7 @@ class PluginManager(
         }
     }
 
-    private suspend fun updateTemplatesWithPlugins() = withContext(Dispatchers.Main) {
+    private suspend fun updateTemplatesWithPlugins() = withContext(Dispatchers.IO) {
         try {
             val templateManager = CloudAPI.instance.getTemplateManager()
             val allTemplates = templateManager.getAllCachedObjects()
@@ -381,7 +438,7 @@ class PluginManager(
 
                 when {
                     isServerTemplate(template.getName()) -> {
-                        val serverPlugins = listOf("LuckPerms-Bukkit", "Spark-Bukkit")
+                        val serverPlugins = getServerPluginsForTemplate(template.getName())
                         serverPlugins.forEach { plugin ->
                             if (!template.getModuleNamesToCopy().contains(plugin)) {
                                 updater.addModuleNameToCopy(plugin)
@@ -391,7 +448,7 @@ class PluginManager(
                     }
 
                     isVelocityTemplate(template.getName()) -> {
-                        val velocityPlugins = listOf("LuckPerms-Velocity", "Spark-Velocity")
+                        val velocityPlugins = getVelocityPluginsForTemplate(template.getName())
                         velocityPlugins.forEach { plugin ->
                             if (!template.getModuleNamesToCopy().contains(plugin)) {
                                 updater.addModuleNameToCopy(plugin)
@@ -421,13 +478,97 @@ class PluginManager(
         }
     }
 
+    private fun getServerPluginsForTemplate(templateName: String): List<String> {
+        val basePlugins = mutableListOf<String>()
+
+        when {
+            isLeafTemplate(templateName) -> {
+                basePlugins.addAll(listOf("LuckPerms-Bukkit", "Spark-Bukkit"))
+                if (config.plugins.find { it.name == "floodgate" }?.enabled == true) {
+                    basePlugins.add("Floodgate-Bukkit")
+                }
+                if (config.plugins.find { it.name == "geyser" }?.enabled == true) {
+                    basePlugins.add("Geyser-Spigot")
+                }
+                if (config.plugins.find { it.name == "protocollib" }?.enabled == true) {
+                    basePlugins.add("ProtocolLib")
+                }
+                if (config.plugins.find { it.name == "placeholderapi" }?.enabled == true) {
+                    basePlugins.add("PlaceholderAPI")
+                }
+            }
+            isPaperTemplate(templateName) || isPurpurTemplate(templateName) || isFoliaTemplate(templateName) -> {
+                basePlugins.addAll(listOf("LuckPerms-Bukkit", "Spark-Bukkit"))
+                if (config.plugins.find { it.name == "protocollib" }?.enabled == true) {
+                    basePlugins.add("ProtocolLib")
+                }
+                if (config.plugins.find { it.name == "placeholderapi" }?.enabled == true) {
+                    basePlugins.add("PlaceholderAPI")
+                }
+            }
+            else -> {
+                basePlugins.addAll(listOf("LuckPerms-Bukkit", "Spark-Bukkit"))
+            }
+        }
+
+        return basePlugins
+    }
+
+    private fun getVelocityPluginsForTemplate(templateName: String): List<String> {
+        val basePlugins = mutableListOf<String>()
+
+        when {
+            isVelocityCTDTemplate(templateName) -> {
+                basePlugins.addAll(listOf("LuckPerms-Velocity", "Spark-Velocity"))
+                if (config.plugins.find { it.name == "floodgate" }?.enabled == true) {
+                    basePlugins.add("Floodgate-Velocity")
+                }
+                if (config.plugins.find { it.name == "geyser" }?.enabled == true) {
+                    basePlugins.add("Geyser-Velocity")
+                }
+            }
+            isStandardVelocityTemplate(templateName) -> {
+                basePlugins.addAll(listOf("LuckPerms-Velocity", "Spark-Velocity"))
+            }
+            else -> {
+                basePlugins.addAll(listOf("LuckPerms-Velocity", "Spark-Velocity"))
+            }
+        }
+
+        return basePlugins
+    }
+
     private fun isServerTemplate(name: String): Boolean {
         val serverKeywords = listOf("spigot", "paper", "purpur", "leaf", "folia", "server")
         return serverKeywords.any { name.contains(it, true) }
     }
 
+    private fun isLeafTemplate(name: String): Boolean {
+        return name.contains("leaf", true)
+    }
+
+    private fun isPaperTemplate(name: String): Boolean {
+        return name.contains("paper", true)
+    }
+
+    private fun isPurpurTemplate(name: String): Boolean {
+        return name.contains("purpur", true)
+    }
+
+    private fun isFoliaTemplate(name: String): Boolean {
+        return name.contains("folia", true)
+    }
+
     private fun isVelocityTemplate(name: String): Boolean {
         return name.contains("velocity", true)
+    }
+
+    private fun isVelocityCTDTemplate(name: String): Boolean {
+        return name.contains("velocityctd", true) || name.contains("velocity-ctd", true) || name.contains("ctd", true)
+    }
+
+    private fun isStandardVelocityTemplate(name: String): Boolean {
+        return name.contains("velocity", true) && !isVelocityCTDTemplate(name)
     }
 
     private fun isBungeeTemplate(name: String): Boolean {

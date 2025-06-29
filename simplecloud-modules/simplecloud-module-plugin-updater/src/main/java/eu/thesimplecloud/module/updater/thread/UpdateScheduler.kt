@@ -1,6 +1,6 @@
 package eu.thesimplecloud.module.updater.thread
 
-import eu.thesimplecloud.module.automanager.config.AutoManagerConfig
+import eu.thesimplecloud.module.updater.config.AutoManagerConfig
 import eu.thesimplecloud.module.updater.manager.PluginUpdaterModule
 import kotlinx.coroutines.*
 import java.util.concurrent.TimeUnit
@@ -9,6 +9,7 @@ class UpdateScheduler(
     private val module: PluginUpdaterModule,
     private var config: AutoManagerConfig
 ) {
+
 
     private val schedulerScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var currentJob: Job? = null
@@ -58,6 +59,8 @@ class UpdateScheduler(
 
             if (config.enableTemplateSync) {
                 module.getTemplateManager().syncAllTemplates()
+                // Static servers are updated on restart only for Leaf/VelocityCTD
+                module.getTemplateManager().syncStaticServersOnRestart()
             }
         } catch (e: Exception) {
             e.printStackTrace()

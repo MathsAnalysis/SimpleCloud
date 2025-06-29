@@ -1,10 +1,11 @@
-
 {
   "name": "AutoManager",
   "author": "SimpleCloud Team",
   "version": "1.0.0",
-  "main": "eu.thesimplecloud.module.updater.PluginUpdaterModule",
+  "mainClass": "eu.thesimplecloud.module.updater.manager.PluginUpdaterModule",
+  "moduleCopyType": "NONE",
+  "repositories": [],
+  "dependencies": [],
   "depend": [],
-  "softDepend": [],
-  "moduleCopyType": "NONE"
+  "softDepend": []
 }

@@ -2,7 +2,7 @@ package eu.thesimplecloud.module.updater.manager
 
 import eu.thesimplecloud.api.directorypaths.DirectoryPaths
 import eu.thesimplecloud.jsonlib.JsonLib
-import eu.thesimplecloud.module.automanager.config.AutoManagerConfig
+import eu.thesimplecloud.module.updater.config.AutoManagerConfig
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -12,6 +12,7 @@ class ServerVersionManager(
     private val module: PluginUpdaterModule,
     private val config: AutoManagerConfig
 ) {
+
 
     private val serverVersionsFile = File(DirectoryPaths.paths.storagePath + "server_versions.json")
 

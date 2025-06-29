@@ -2,8 +2,8 @@ package eu.thesimplecloud.module.updater.manager
 
 
 import eu.thesimplecloud.api.external.ICloudModule
-import eu.thesimplecloud.module.automanager.config.AutoManagerConfig
 import eu.thesimplecloud.module.updater.api.AutoManagerAPI
+import eu.thesimplecloud.module.updater.config.AutoManagerConfig
 import eu.thesimplecloud.module.updater.thread.UpdateScheduler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -22,7 +22,7 @@ class PluginUpdaterModule : ICloudModule {
     }
 
     private lateinit var config: AutoManagerConfig
-    private lateinit var serverVersionManager: AutoServerVersionManager
+    private lateinit var serverVersionManager: ServerVersionManager
     private lateinit var pluginManager: PluginManager
     private lateinit var templateManager: TemplateManager
     private lateinit var updateScheduler: UpdateScheduler
@@ -46,21 +46,19 @@ class PluginUpdaterModule : ICloudModule {
     override fun onDisable() {
         try {
             moduleScope.cancel()
-            if (::updateScheduler.isInitialized) {
-                updateScheduler.shutdown()
-            }
+            updateScheduler.shutdown()
         } catch (e: Exception) {
             e.printStackTrace()
         }
     }
 
     private fun loadConfiguration() {
-        val configFile = File("modules/automanager", "config.json")
+        val configFile = File("modules/automanager", "config.yml")
         config = AutoManagerConfig.load(configFile)
     }
 
     private fun initializeManagers() {
-        serverVersionManager = AutoServerVersionManager(this, config)
+        serverVersionManager = ServerVersionManager(this, config)
         pluginManager = PluginManager(this, config)
         templateManager = TemplateManager(this, config)
         updateScheduler = UpdateScheduler(this, config)
@@ -108,9 +106,7 @@ class PluginUpdaterModule : ICloudModule {
     fun reloadConfig() {
         try {
             loadConfiguration()
-            if (::updateScheduler.isInitialized) {
-                updateScheduler.updateConfig(config)
-            }
+            updateScheduler.updateConfig(config)
         } catch (e: Exception) {
             e.printStackTrace()
         }

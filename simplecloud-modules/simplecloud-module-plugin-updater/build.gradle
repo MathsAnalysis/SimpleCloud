@@ -20,13 +20,25 @@
  * DEALINGS IN THE SOFTWARE.
  */
 
-shadowJar {
-    archiveFileName.set("SimpleCloud-Updater.jar")
-}
-
 dependencies {
-    compileOnly(project(":simplecloud-base"))
-    compileOnly(project(":simplecloud-api"))
-    compileOnly(project(":simplecloud-launcher"))
-    compileOnly(project(":simplecloud-plugin"))
+
+    shadowJar {
+        archiveFileName.set("SimpleCloud-Updater.jar")
+    }
+
+    dependencies {
+        compileOnly(project(":simplecloud-base")) {
+            transitive = false
+        }
+        compileOnly(project(":simplecloud-api")) {
+            transitive = false
+        }
+        compileOnly(project(":simplecloud-plugin")) {
+            transitive = false
+        }
+        compileOnly(project(":simplecloud-launcher")) {
+            transitive = false
+        }
+    }
+
 }
