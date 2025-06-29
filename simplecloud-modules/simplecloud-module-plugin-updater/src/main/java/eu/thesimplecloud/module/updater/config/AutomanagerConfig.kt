@@ -1,5 +1,4 @@
-package eu.thesimplecloud.simplecloud.PluginUpdaterModule.config
-
+package eu.thesimplecloud.module.automanager.config
 
 import eu.thesimplecloud.jsonlib.JsonLib
 import java.io.File
@@ -68,7 +67,8 @@ data class AutoManagerConfig(
         fun load(file: File): AutoManagerConfig {
             return try {
                 if (file.exists()) {
-                    JsonLib.fromJsonFile(file)?.getObject(AutoManagerConfig::class.java) ?: createDefault(file)
+                    JsonLib.fromJsonFile(file)?.getObject(AutoManagerConfig::class.java)
+                        ?: createDefault(file)
                 } else {
                     createDefault(file)
                 }
@@ -84,10 +84,14 @@ data class AutoManagerConfig(
         }
 
         fun save(file: File, config: AutoManagerConfig) {
-            file.parentFile.mkdirs()
-            JsonLib.empty()
-                .append("config", config)
-                .saveAsFile(file)
+            try {
+                file.parentFile.mkdirs()
+                JsonLib.empty()
+                    .append("config", config)
+                    .saveAsFile(file)
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
         }
 
         fun defaultServerSoftware() = listOf(

@@ -41,7 +41,7 @@ class ServiceVersionWebLoader : IServiceVersionLoader {
     private val file = File(DirectoryPaths.paths.storagePath + "onlineServiceVersions.json")
 
     override fun loadVersions(): List<ServiceVersion> {
-        val contentString = WebContentLoader().loadContent("https://raw.githubusercontent.com/MathsAnalysis/simplecloud-manifest/refs/heads/core/server_version.json")
+        val contentString = WebContentLoader().loadContent("https://raw.githubusercontent.com/MathsAnalysis/simplecloud-manifest/refs/heads/main/server_versions.json")
         return if (contentString == null) {
             loadFromFile()
         } else {
