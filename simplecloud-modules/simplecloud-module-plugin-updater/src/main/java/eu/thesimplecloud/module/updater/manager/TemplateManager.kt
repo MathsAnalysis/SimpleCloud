@@ -7,6 +7,7 @@ import eu.thesimplecloud.api.template.impl.DefaultTemplate
 import eu.thesimplecloud.module.updater.config.AutoManagerConfig
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import org.apache.commons.io.FileUtils
 import java.io.File
 import java.net.URL
 
@@ -25,6 +26,10 @@ class TemplateManager(
                 success = createBaseTemplates() && success
             }
 
+            if (config.enableServerVersionUpdates) {
+                success = updateBaseJars() && success
+            }
+
             val templateManager = CloudAPI.instance.getTemplateManager()
             val allTemplates = templateManager.getAllCachedObjects()
 
@@ -39,6 +44,133 @@ class TemplateManager(
             success
         } catch (e: Exception) {
             false
+        }
+    }
+
+    private suspend fun updateBaseJars(): Boolean = withContext(Dispatchers.IO) {
+        return@withContext try {
+            var success = true
+
+            val serverVersionManager = module.getServerVersionManager()
+            val currentVersions = serverVersionManager.getCurrentVersions()
+
+            val leafVersions = currentVersions.find { it.name == "Leaf" }
+            if (leafVersions != null) {
+                success = updateBaseLeafJar(leafVersions) && success
+            }
+
+            val velocityCTDVersions = currentVersions.find { it.name == "VelocityCTD" }
+            if (velocityCTDVersions != null) {
+                success = updateBaseVelocityCTDJar(velocityCTDVersions) && success
+            }
+
+            success
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    private suspend fun updateBaseLeafJar(serverVersion: ServerVersionManager.ServerVersionEntry): Boolean = withContext(Dispatchers.IO) {
+        return@withContext try {
+            if (serverVersion.downloadLinks.isEmpty()) return@withContext true
+
+            val latestDownload = serverVersion.downloadLinks.first()
+
+            val leafBaseDir = File(DirectoryPaths.paths.minecraftJarsPath + "Leaf/")
+            val paperclipFile = File(leafBaseDir, "paperclip.jar")
+            val serverJarFile = File(leafBaseDir, "server.jar")
+
+            if (isJarUpToDate(paperclipFile, latestDownload.link)) {
+                return@withContext true
+            }
+
+            leafBaseDir.mkdirs()
+
+            URL(latestDownload.link).openStream().use { input ->
+                paperclipFile.outputStream().use { output ->
+                    input.copyTo(output)
+                }
+            }
+
+            if (serverJarFile.exists()) {
+                serverJarFile.delete()
+            }
+
+            executePaperClip(paperclipFile, leafBaseDir)
+            deleteUnnecessaryFiles(leafBaseDir)
+
+            true
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    private suspend fun updateBaseVelocityCTDJar(serverVersion: ServerVersionManager.ServerVersionEntry): Boolean = withContext(Dispatchers.IO) {
+        return@withContext try {
+            if (serverVersion.downloadLinks.isEmpty()) return@withContext true
+
+            val latestDownload = serverVersion.downloadLinks.first()
+
+            val velocityJarFile = File(DirectoryPaths.paths.minecraftJarsPath + "VelocityCTD.jar")
+
+            if (isJarUpToDate(velocityJarFile, latestDownload.link)) {
+                return@withContext true
+            }
+
+            velocityJarFile.parentFile.mkdirs()
+
+            URL(latestDownload.link).openStream().use { input ->
+                velocityJarFile.outputStream().use { output ->
+                    input.copyTo(output)
+                }
+            }
+
+            true
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    private suspend fun isJarUpToDate(jarFile: File, downloadUrl: String): Boolean = withContext(Dispatchers.IO) {
+        return@withContext try {
+            if (!jarFile.exists()) return@withContext false
+
+            val fileModifiedTime = jarFile.lastModified()
+            val currentTime = System.currentTimeMillis()
+            val oneDayMillis = 24 * 60 * 60 * 1000
+
+            (currentTime - fileModifiedTime) < oneDayMillis
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    private suspend fun executePaperClip(paperclipFile: File, workingDir: File) = withContext(Dispatchers.IO) {
+        try {
+            val processBuilder = ProcessBuilder("java", "-jar", paperclipFile.absolutePath)
+            processBuilder.directory(workingDir)
+            val process = processBuilder.start()
+            process.waitFor()
+        } catch (e: Exception) {
+
+        }
+    }
+
+    private fun deleteUnnecessaryFiles(dir: File) {
+        try {
+            val unnecessaryFileNames = listOf("eula.txt", "server.properties", "logs", "cache")
+            for (fileName in unnecessaryFileNames) {
+                val file = File(dir, fileName)
+                if (file.exists()) {
+                    if (file.isDirectory) {
+                        FileUtils.deleteDirectory(file)
+                    } else {
+                        file.delete()
+                    }
+                }
+            }
+        } catch (e: Exception) {
+
         }
     }
 
@@ -123,12 +255,19 @@ class TemplateManager(
 
     private suspend fun updateLeafJar(serviceDir: File) = withContext(Dispatchers.IO) {
         try {
+            val jarFile = File(serviceDir, "server.jar")
+
+            val baseServerJar = File(DirectoryPaths.paths.minecraftJarsPath + "Leaf/server.jar")
+            if (baseServerJar.exists() && baseServerJar.lastModified() > jarFile.lastModified()) {
+                baseServerJar.copyTo(jarFile, overwrite = true)
+                return@withContext
+            }
+
             val serverVersionManager = module.getServerVersionManager()
             val leafVersions = serverVersionManager.getCurrentVersions().find { it.name == "Leaf" }
 
             if (leafVersions != null && leafVersions.downloadLinks.isNotEmpty()) {
                 val latestDownload = leafVersions.downloadLinks.first()
-                val jarFile = File(serviceDir, "server.jar")
 
                 URL(latestDownload.link).openStream().use { input ->
                     jarFile.outputStream().use { output ->
@@ -137,18 +276,25 @@ class TemplateManager(
                 }
             }
         } catch (e: Exception) {
-            // Ignore
+
         }
     }
 
     private suspend fun updateVelocityCTDJar(serviceDir: File) = withContext(Dispatchers.IO) {
         try {
+            val jarFile = File(serviceDir, "velocity.jar")
+
+            val baseVelocityJar = File(DirectoryPaths.paths.minecraftJarsPath + "VelocityCTD.jar")
+            if (baseVelocityJar.exists() && baseVelocityJar.lastModified() > jarFile.lastModified()) {
+                baseVelocityJar.copyTo(jarFile, overwrite = true)
+                return@withContext
+            }
+
             val serverVersionManager = module.getServerVersionManager()
             val velocityCTDVersions = serverVersionManager.getCurrentVersions().find { it.name == "VelocityCTD" }
 
             if (velocityCTDVersions != null && velocityCTDVersions.downloadLinks.isNotEmpty()) {
                 val latestDownload = velocityCTDVersions.downloadLinks.first()
-                val jarFile = File(serviceDir, "velocity.jar")
 
                 URL(latestDownload.link).openStream().use { input ->
                     jarFile.outputStream().use { output ->
@@ -157,10 +303,11 @@ class TemplateManager(
                 }
             }
         } catch (e: Exception) {
-            // Ignore
+
         }
     }
 
+    // Resto dei metodi esistenti...
     private suspend fun createBaseTemplates(): Boolean = withContext(Dispatchers.IO) {
         return@withContext try {
             val templateManager = CloudAPI.instance.getTemplateManager()
