@@ -1,0 +1,14 @@
+{
+  "name": "AutoManager",
+  "author": "SimpleCloud Team",
+  "version": "1.0.0",
+  "description": "Automatic management of server versions, plugins, and templates",
+  "main": "eu.thesimplecloud.module.automanager.AutoManagerModule",
+  "depend": [],
+  "softDepend": [],
+  "repositories": [
+    "https://repo.simplecloud.app/releases/"
+  ],
+  "website": "https://simplecloud.app",
+  "moduleCopyType": "NONE"
+}
