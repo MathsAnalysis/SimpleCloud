@@ -1,0 +1,10 @@
+shadowJar {
+    archiveFileName.set("SimpleCloud-Autorestart.jar")
+}
+
+dependencies {
+    compileOnly(project(":simplecloud-base"))
+    compileOnly(project(":simplecloud-api"))
+    compileOnly(project(":simplecloud-plugin"))
+    compileOnly(project(":simplecloud-launcher"))
+}

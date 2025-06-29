@@ -1,0 +1,10 @@
+{
+  "name": "SimpleCloud-AutoRestart",
+  "author": "SimpleCloud",
+  "mainClass": "eu.thesimplecloud.simplecloud.autorestart.module.AutoRestartModule",
+  "moduleCopyType": "NONE",
+  "repositories": [],
+  "dependencies": [],
+  "depend": [],
+  "softDepend": []
+}
