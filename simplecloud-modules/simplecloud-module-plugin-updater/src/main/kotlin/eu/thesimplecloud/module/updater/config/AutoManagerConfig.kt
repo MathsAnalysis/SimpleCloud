@@ -2,6 +2,7 @@ package eu.thesimplecloud.module.updater.config
 
 import eu.thesimplecloud.jsonlib.JsonLib
 import java.io.File
+
 data class AutoManagerConfig(
     val enableAutomation: Boolean = true,
     val updateInterval: String = "6h",

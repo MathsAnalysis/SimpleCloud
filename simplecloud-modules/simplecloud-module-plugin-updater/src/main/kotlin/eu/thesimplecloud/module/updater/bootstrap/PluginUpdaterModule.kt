@@ -1,9 +1,11 @@
-package eu.thesimplecloud.module.updater.manager
-
+package eu.thesimplecloud.module.updater.bootstrap
 
 import eu.thesimplecloud.api.external.ICloudModule
-import eu.thesimplecloud.module.updater.api.AutoManagerAPI
+import eu.thesimplecloud.module.updater.api.UpdaterAPI
 import eu.thesimplecloud.module.updater.config.AutoManagerConfig
+import eu.thesimplecloud.module.updater.manager.PluginManager
+import eu.thesimplecloud.module.updater.manager.ServerVersionManager
+import eu.thesimplecloud.module.updater.manager.TemplateManager
 import eu.thesimplecloud.module.updater.thread.UpdateScheduler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -15,10 +17,9 @@ class PluginUpdaterModule : ICloudModule {
 
     companion object {
         lateinit var instance: PluginUpdaterModule
-            private set
+        private set
 
-        val INSTANCE: PluginUpdaterModule
-            get() = instance
+        val INSTANCE: PluginUpdaterModule get() = instance
     }
 
     private lateinit var config: AutoManagerConfig
@@ -26,7 +27,7 @@ class PluginUpdaterModule : ICloudModule {
     private lateinit var pluginManager: PluginManager
     private lateinit var templateManager: TemplateManager
     private lateinit var updateScheduler: UpdateScheduler
-    private lateinit var api: AutoManagerAPI
+    private lateinit var api: UpdaterAPI
 
     private val moduleScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
@@ -54,7 +55,7 @@ class PluginUpdaterModule : ICloudModule {
 
     private fun loadConfiguration() {
         val configFile = File("modules/automanager", "config.yml")
-        config = AutoManagerConfig.load(configFile)
+        config = AutoManagerConfig.Companion.load(configFile)
     }
 
     private fun initializeManagers() {
@@ -71,7 +72,7 @@ class PluginUpdaterModule : ICloudModule {
     }
 
     private fun registerAPI() {
-        api = AutoManagerAPI(this)
+        api = UpdaterAPI(this)
     }
 
     suspend fun runManualUpdate(): Boolean {

@@ -1,7 +1,7 @@
 package eu.thesimplecloud.module.updater.thread
 
+import eu.thesimplecloud.module.updater.bootstrap.PluginUpdaterModule
 import eu.thesimplecloud.module.updater.config.AutoManagerConfig
-import eu.thesimplecloud.module.updater.manager.PluginUpdaterModule
 import kotlinx.coroutines.*
 import java.util.concurrent.TimeUnit
 
@@ -9,8 +9,6 @@ class UpdateScheduler(
     private val module: PluginUpdaterModule,
     private var config: AutoManagerConfig
 ) {
-
-
     private val schedulerScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var currentJob: Job? = null
 
@@ -26,7 +24,7 @@ class UpdateScheduler(
                 try {
                     runScheduledUpdate()
                     delay(parseInterval(config.updateInterval))
-                } catch (e: Exception) {
+                } catch (_: Exception) {
                     delay(TimeUnit.MINUTES.toMillis(30))
                 }
             }

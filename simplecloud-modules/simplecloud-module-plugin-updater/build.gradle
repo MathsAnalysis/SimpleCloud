@@ -27,18 +27,10 @@ dependencies {
     }
 
     dependencies {
-        compileOnly(project(":simplecloud-base")) {
-            transitive = false
-        }
-        compileOnly(project(":simplecloud-api")) {
-            transitive = false
-        }
-        compileOnly(project(":simplecloud-plugin")) {
-            transitive = false
-        }
-        compileOnly(project(":simplecloud-launcher")) {
-            transitive = false
-        }
+        implementation project(':simplecloud-api')
+        implementation project(':simplecloud-base')
+        implementation project(':simplecloud-launcher')
+        implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-core:1.6.4'
     }
 
 }

@@ -1,9 +1,8 @@
 package eu.thesimplecloud.module.updater.api
 
+import eu.thesimplecloud.module.updater.bootstrap.PluginUpdaterModule
 import eu.thesimplecloud.module.updater.config.AutoManagerConfig
-import eu.thesimplecloud.module.updater.manager.AutoServerVersionManager
 import eu.thesimplecloud.module.updater.manager.PluginManager
-import eu.thesimplecloud.module.updater.manager.PluginUpdaterModule
 import eu.thesimplecloud.module.updater.manager.TemplateManager
 import eu.thesimplecloud.module.updater.thread.UpdateScheduler
 import kotlinx.coroutines.CoroutineScope
@@ -11,9 +10,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import java.util.concurrent.CompletableFuture
 
-typealias ServerVersionEntry = AutoServerVersionManager.ServerVersionEntry
-
-class AutoManagerAPI(private val module: PluginUpdaterModule) {
+class UpdaterAPI(private val module: PluginUpdaterModule) {
 
     private val apiScope = CoroutineScope(Dispatchers.IO)
 
@@ -27,8 +24,8 @@ class AutoManagerAPI(private val module: PluginUpdaterModule) {
 
     fun getUpdateScheduler(): UpdateScheduler = module.getUpdateScheduler()
 
-    fun forceUpdate(): java.util.concurrent.CompletableFuture<Boolean> {
-        val future = java.util.concurrent.CompletableFuture<Boolean>()
+    fun forceUpdate(): CompletableFuture<Boolean> {
+        val future = CompletableFuture<Boolean>()
 
         apiScope.launch {
             try {
@@ -42,8 +39,8 @@ class AutoManagerAPI(private val module: PluginUpdaterModule) {
         return future
     }
 
-    fun updateServerVersions(): java.util.concurrent.CompletableFuture<Boolean> {
-        val future = java.util.concurrent.CompletableFuture<Boolean>()
+    fun updateServerVersions(): CompletableFuture<Boolean> {
+        val future = CompletableFuture<Boolean>()
 
         apiScope.launch {
             try {
@@ -57,8 +54,8 @@ class AutoManagerAPI(private val module: PluginUpdaterModule) {
         return future
     }
 
-    fun updatePlugins(): java.util.concurrent.CompletableFuture<Boolean> {
-        val future = java.util.concurrent.CompletableFuture<Boolean>()
+    fun updatePlugins(): CompletableFuture<Boolean> {
+        val future = CompletableFuture<Boolean>()
 
         apiScope.launch {
             try {
@@ -72,8 +69,8 @@ class AutoManagerAPI(private val module: PluginUpdaterModule) {
         return future
     }
 
-    fun syncTemplates(): java.util.concurrent.CompletableFuture<Boolean> {
-        val future = java.util.concurrent.CompletableFuture<Boolean>()
+    fun syncTemplates(): CompletableFuture<Boolean> {
+        val future = CompletableFuture<Boolean>()
 
         apiScope.launch {
             try {
@@ -87,8 +84,8 @@ class AutoManagerAPI(private val module: PluginUpdaterModule) {
         return future
     }
 
-    fun ensurePluginsDownloaded(): java.util.concurrent.CompletableFuture<Boolean> {
-        val future = java.util.concurrent.CompletableFuture<Boolean>()
+    fun ensurePluginsDownloaded(): CompletableFuture<Boolean> {
+        val future = CompletableFuture<Boolean>()
 
         apiScope.launch {
             try {
@@ -102,8 +99,8 @@ class AutoManagerAPI(private val module: PluginUpdaterModule) {
         return future
     }
 
-    fun updateStaticServers(): java.util.concurrent.CompletableFuture<Boolean> {
-        val future = java.util.concurrent.CompletableFuture<Boolean>()
+    fun updateStaticServers(): CompletableFuture<Boolean> {
+        val future = CompletableFuture<Boolean>()
 
         apiScope.launch {
             try {

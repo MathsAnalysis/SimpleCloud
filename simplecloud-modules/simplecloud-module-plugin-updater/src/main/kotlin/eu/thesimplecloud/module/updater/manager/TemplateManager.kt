@@ -2,8 +2,10 @@ package eu.thesimplecloud.module.updater.manager
 
 import eu.thesimplecloud.api.CloudAPI
 import eu.thesimplecloud.api.directorypaths.DirectoryPaths
+import eu.thesimplecloud.api.service.ICloudService
 import eu.thesimplecloud.api.template.ITemplate
 import eu.thesimplecloud.api.template.impl.DefaultTemplate
+import eu.thesimplecloud.module.updater.bootstrap.PluginUpdaterModule
 import eu.thesimplecloud.module.updater.config.AutoManagerConfig
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -174,25 +176,12 @@ class TemplateManager(
         }
     }
 
-    suspend fun syncStaticServersOnRestart(): Boolean = withContext(Dispatchers.IO) {
-        return@withContext try {
-            val serviceManager = CloudAPI.instance.getCloudServiceManager()
-            val staticServices = serviceManager.getAllCachedObjects().filter { it.isStatic() }
-
-            staticServices.forEach { service ->
-                if (shouldUpdateStaticService(service)) {
-                    syncStaticServiceOnRestart(service)
-                }
+    suspend fun syncStaticServersOnRestart(service: eu.thesimplecloud.api.service.ICloudService): Boolean = withContext(Dispatchers.IO) {
+        try {
+            if (needsServerJarUpdate(service)) {
+                println("[AutoManager] Rilevato servizio ${service.getName()} che necessita aggiornamento jar")
             }
 
-            true
-        } catch (e: Exception) {
-            false
-        }
-    }
-
-    private suspend fun syncStaticServiceOnRestart(service: eu.thesimplecloud.api.service.ICloudService) = withContext(Dispatchers.IO) {
-        try {
             val serviceDir = File(DirectoryPaths.paths.staticPath + service.getName())
             val pluginsDir = File(serviceDir, "plugins")
 
@@ -213,101 +202,120 @@ class TemplateManager(
             }
 
             if (needsServerJarUpdate(service)) {
+                println("[AutoManager] Avvio aggiornamento jar per servizio ${service.getName()}")
                 updateServerJar(service, serviceDir)
             }
 
+            return@withContext true
+
         } catch (e: Exception) {
-            // Ignore
+            println("[AutoManager] Errore durante syncStaticServersOnRestart per ${service.getName()}: ${e.message}")
+             return@withContext false
         }
     }
 
-    private fun shouldUpdateStaticService(service: eu.thesimplecloud.api.service.ICloudService): Boolean {
-        val serviceName = service.getName().lowercase()
-        val groupName = service.getServiceGroup().getName().lowercase()
-
-        return isLeafService(serviceName, groupName) || isVelocityCTDService(serviceName, groupName)
-    }
-
-    private fun needsServerJarUpdate(service: eu.thesimplecloud.api.service.ICloudService): Boolean {
-        val serviceName = service.getName().lowercase()
-        val groupName = service.getServiceGroup().getName().lowercase()
-
-        return isLeafService(serviceName, groupName) || isVelocityCTDService(serviceName, groupName)
-    }
-
-    private suspend fun updateServerJar(service: eu.thesimplecloud.api.service.ICloudService, serviceDir: File) = withContext(Dispatchers.IO) {
+    suspend fun syncStaticServersOnRestart(): Boolean = withContext(Dispatchers.IO) {
         try {
-            val serviceName = service.getName().lowercase()
-            val groupName = service.getServiceGroup().getName().lowercase()
+            val serviceManager = CloudAPI.instance.getCloudServiceManager()
+            val staticServices = serviceManager.getAllCachedObjects().filter { it.isStatic() }
 
+            var allSuccess = true
+            staticServices.forEach { service ->
+                val success = syncStaticServersOnRestart(service)
+                if (!success) allSuccess = false
+            }
+
+            return@withContext allSuccess
+        } catch (e: Exception) {
+            println("[AutoManager] Errore durante syncStaticServersOnRestart globale: ${e.message}")
+            return@withContext false
+        }
+    }
+
+    private fun shouldUpdateStaticService(service: ICloudService): Boolean {
+        val serviceName = service.getName().lowercase()
+        val groupName = service.getServiceGroup().getName().lowercase()
+
+        return isLeafService(serviceName, groupName) || isVelocityCTDService(serviceName, groupName)
+    }
+
+    private fun needsServerJarUpdate(service: ICloudService): Boolean {
+        return isLeafService(service) || isVelocityCTDService(service)
+    }
+
+    private suspend fun updateServerJar(service: ICloudService, serviceDir: File) = withContext(Dispatchers.IO) {
+        try {
             when {
-                isLeafService(serviceName, groupName) -> {
+                isLeafService(service) -> {
                     updateLeafJar(serviceDir)
                 }
-                isVelocityCTDService(serviceName, groupName) -> {
+                isVelocityCTDService(service) -> {
                     updateVelocityCTDJar(serviceDir)
                 }
             }
         } catch (e: Exception) {
-            // Ignore
+            println("[AutoManager] Errore generale durante l'aggiornamento server jar: ${e.message}")
         }
     }
 
     private suspend fun updateLeafJar(serviceDir: File) = withContext(Dispatchers.IO) {
         try {
-            val jarFile = File(serviceDir, "server.jar")
-
-            val baseServerJar = File(DirectoryPaths.paths.minecraftJarsPath + "Leaf/server.jar")
-            if (baseServerJar.exists() && baseServerJar.lastModified() > jarFile.lastModified()) {
-                baseServerJar.copyTo(jarFile, overwrite = true)
-                return@withContext
-            }
+            println("[AutoManager] Aggiornando Leaf jar...")
 
             val serverVersionManager = module.getServerVersionManager()
             val leafVersions = serverVersionManager.getCurrentVersions().find { it.name == "Leaf" }
 
             if (leafVersions != null && leafVersions.downloadLinks.isNotEmpty()) {
                 val latestDownload = leafVersions.downloadLinks.first()
+                val jarFile = File(serviceDir, "server.jar")
+
+                println("[AutoManager] Scaricando Leaf ${latestDownload.version} da: ${latestDownload.link}")
 
                 URL(latestDownload.link).openStream().use { input ->
                     jarFile.outputStream().use { output ->
                         input.copyTo(output)
                     }
                 }
+
+                println("[AutoManager] Leaf jar aggiornato con successo a versione ${latestDownload.version}")
+            } else {
+                println("[AutoManager] Nessuna versione Leaf disponibile per il download")
             }
         } catch (e: Exception) {
-
+            println("[AutoManager] Errore durante l'aggiornamento Leaf jar: ${e.message}")
+            e.printStackTrace()
         }
     }
 
     private suspend fun updateVelocityCTDJar(serviceDir: File) = withContext(Dispatchers.IO) {
         try {
-            val jarFile = File(serviceDir, "velocity.jar")
-
-            val baseVelocityJar = File(DirectoryPaths.paths.minecraftJarsPath + "VelocityCTD.jar")
-            if (baseVelocityJar.exists() && baseVelocityJar.lastModified() > jarFile.lastModified()) {
-                baseVelocityJar.copyTo(jarFile, overwrite = true)
-                return@withContext
-            }
+            println("[AutoManager] Aggiornando VelocityCTD jar...")
 
             val serverVersionManager = module.getServerVersionManager()
             val velocityCTDVersions = serverVersionManager.getCurrentVersions().find { it.name == "VelocityCTD" }
 
             if (velocityCTDVersions != null && velocityCTDVersions.downloadLinks.isNotEmpty()) {
                 val latestDownload = velocityCTDVersions.downloadLinks.first()
+                val jarFile = File(serviceDir, "velocity.jar")
+
+                println("[AutoManager] Scaricando VelocityCTD ${latestDownload.version} da: ${latestDownload.link}")
 
                 URL(latestDownload.link).openStream().use { input ->
                     jarFile.outputStream().use { output ->
                         input.copyTo(output)
                     }
                 }
+
+                println("[AutoManager] VelocityCTD jar aggiornato con successo a versione ${latestDownload.version}")
+            } else {
+                println("[AutoManager] Nessuna versione VelocityCTD disponibile per il download")
             }
         } catch (e: Exception) {
-
+            println("[AutoManager] Errore durante l'aggiornamento VelocityCTD jar: ${e.message}")
+            e.printStackTrace()
         }
     }
 
-    // Resto dei metodi esistenti...
     private suspend fun createBaseTemplates(): Boolean = withContext(Dispatchers.IO) {
         return@withContext try {
             val templateManager = CloudAPI.instance.getTemplateManager()
@@ -387,7 +395,23 @@ class TemplateManager(
     private fun getOptionalVelocityPlugins(): List<String> = emptyList()
 
     private fun isLeafService(serviceName: String, groupName: String): Boolean {
-        return serviceName.contains("leaf") || groupName.contains("leaf")
+        return serviceName.contains("leaf", true) || groupName.contains("leaf", true)
+    }
+
+    private fun isLeafService(service: ICloudService): Boolean {
+        val serviceName = service.getName().lowercase()
+        val groupName = service.getServiceGroup().getName().lowercase()
+
+        if (serviceName.contains("leaf") || groupName.contains("leaf")) {
+            return true
+        }
+
+        try {
+            val serviceVersionName = service.getServiceVersion().name.uppercase()
+            return serviceVersionName.startsWith("LEAF")
+        } catch (e: Exception) {
+            return false
+        }
     }
 
     private fun isPaperService(serviceName: String, groupName: String): Boolean {
@@ -401,9 +425,26 @@ class TemplateManager(
                 serviceName.contains("ctd") || groupName.contains("ctd")
     }
 
+    private fun isVelocityCTDService(service: ICloudService): Boolean {
+        val serviceName = service.getName().lowercase()
+        val groupName = service.getServiceGroup().getName().lowercase()
+
+        if (isVelocityCTDService(serviceName, groupName)) {
+            return true
+        }
+
+        try {
+            val serviceVersionName = service.getServiceVersion().name.uppercase()
+            return serviceVersionName.startsWith("VELOCITYCTD")
+        } catch (e: Exception) {
+            return false
+        }
+    }
+
     private fun isVelocityService(serviceName: String, groupName: String): Boolean {
         return (serviceName.contains("velocity") || groupName.contains("velocity")) && !isVelocityCTDService(serviceName, groupName)
     }
+
 
     private fun isBungeeService(serviceName: String, groupName: String): Boolean {
         return serviceName.contains("bungee") || groupName.contains("bungee") ||
