@@ -1,44 +1,30 @@
 package eu.thesimplecloud.module.updater.bootstrap
 
+import eu.thesimplecloud.api.CloudAPI
+import eu.thesimplecloud.api.directorypaths.DirectoryPaths
+import eu.thesimplecloud.api.event.service.CloudServiceStartingEvent
+import eu.thesimplecloud.api.eventapi.CloudEventHandler
+import eu.thesimplecloud.api.eventapi.IListener
 import eu.thesimplecloud.api.external.ICloudModule
-import eu.thesimplecloud.module.updater.api.UpdaterAPI
-import eu.thesimplecloud.module.updater.config.AutoManagerConfig
-import eu.thesimplecloud.module.updater.manager.PluginManager
-import eu.thesimplecloud.module.updater.manager.ServerVersionManager
-import eu.thesimplecloud.module.updater.manager.TemplateManager
-import eu.thesimplecloud.module.updater.thread.UpdateScheduler
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancel
+import eu.thesimplecloud.api.service.ICloudService
+import kotlinx.coroutines.*
 import java.io.File
+import java.net.URL
 
-class PluginUpdaterModule : ICloudModule {
+class PluginUpdaterModule : ICloudModule, IListener {
 
     companion object {
         lateinit var instance: PluginUpdaterModule
-        private set
-
-        val INSTANCE: PluginUpdaterModule get() = instance
+            private set
     }
-
-    private lateinit var config: AutoManagerConfig
-    private lateinit var serverVersionManager: ServerVersionManager
-    private lateinit var pluginManager: PluginManager
-    private lateinit var templateManager: TemplateManager
-    private lateinit var updateScheduler: UpdateScheduler
-    private lateinit var api: UpdaterAPI
 
     private val moduleScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
     override fun onEnable() {
         instance = this
-
         try {
-            loadConfiguration()
-            initializeManagers()
-            startAutomationSystem()
-            registerAPI()
+            CloudAPI.instance.getEventManager().registerListener(this, this)
+            println("[AutoManager] Module loaded successfully")
         } catch (e: Exception) {
             e.printStackTrace()
         }
@@ -47,69 +33,96 @@ class PluginUpdaterModule : ICloudModule {
     override fun onDisable() {
         try {
             moduleScope.cancel()
-            updateScheduler.shutdown()
+            CloudAPI.instance.getEventManager().unregisterListener(this)
         } catch (e: Exception) {
             e.printStackTrace()
         }
     }
 
-    private fun loadConfiguration() {
-        val configFile = File("modules/automanager", "config.yml")
-        config = AutoManagerConfig.Companion.load(configFile)
-    }
-
-    private fun initializeManagers() {
-        serverVersionManager = ServerVersionManager(this, config)
-        pluginManager = PluginManager(this, config)
-        templateManager = TemplateManager(this, config)
-        updateScheduler = UpdateScheduler(this, config)
-    }
-
-    private fun startAutomationSystem() {
-        if (config.enableAutomation) {
-            updateScheduler.start()
+    @CloudEventHandler
+    fun onServiceStarting(event: CloudServiceStartingEvent) {
+        moduleScope.launch {
+            val service = event.cloudService
+            if (isLeafService(service) || isVelocityCTDService(service)) {
+                updateServiceJar(service)
+            }
         }
     }
 
-    private fun registerAPI() {
-        api = UpdaterAPI(this)
+    private suspend fun updateServiceJar(service: ICloudService) = withContext(Dispatchers.IO) {
+        try {
+            val serviceDir = if (service.isStatic()) {
+                File(DirectoryPaths.paths.staticPath + service.getName())
+            } else {
+                File(DirectoryPaths.paths.tempPath + service.getName())
+            }
+
+            when {
+                isLeafService(service) -> {
+                    val jarFile = File(serviceDir, "server.jar")
+                    val downloadUrl = "https://github.com/Winds-Studio/Leaf/releases/download/ver-1.21.6/leaf-1.21.6-20.jar"
+
+                    println("[AutoManager] Updating ${service.getName()} to latest Leaf version")
+
+                    serviceDir.mkdirs()
+                    URL(downloadUrl).openStream().use { input ->
+                        jarFile.outputStream().use { output ->
+                            input.copyTo(output)
+                        }
+                    }
+                    println("[AutoManager] ${service.getName()} updated successfully")
+                }
+                isVelocityCTDService(service) -> {
+                    val velocityJar = File(serviceDir, "velocity.jar")
+                    val downloadUrl = "https://github.com/GemstoneGG/Velocity-CTD/releases/download/Releases/velocity-proxy-3.4.0-SNAPSHOT-all.jar"
+
+                    println("[AutoManager] Updating ${service.getName()} to latest VelocityCTD version")
+
+                    serviceDir.mkdirs()
+                    URL(downloadUrl).openStream().use { input ->
+                        velocityJar.outputStream().use { output ->
+                            input.copyTo(output)
+                        }
+                    }
+                    println("[AutoManager] ${service.getName()} updated successfully")
+                }
+            }
+        } catch (e: Exception) {
+            println("[AutoManager] Error updating ${service.getName()}: ${e.message}")
+        }
     }
 
-    suspend fun runManualUpdate(): Boolean {
+    private fun isLeafService(service: ICloudService): Boolean {
+        val serviceName = service.getName().lowercase()
+        val groupName = service.getServiceGroup().getName().lowercase()
+
+        if (serviceName.contains("leaf") || groupName.contains("leaf")) {
+            return true
+        }
+
         return try {
-            var success = true
-
-            if (config.enableServerVersionUpdates) {
-                success = serverVersionManager.updateAllVersions() && success
-            }
-
-            if (config.enablePluginUpdates) {
-                success = pluginManager.updateAllPlugins() && success
-            }
-
-            if (config.enableTemplateSync) {
-                success = templateManager.syncAllTemplates() && success
-            }
-
-            success
+            val serviceVersionName = service.getServiceVersion().name.uppercase()
+            serviceVersionName.startsWith("LEAF")
         } catch (e: Exception) {
             false
         }
     }
 
-    fun getServerVersionManager() = serverVersionManager
-    fun getPluginManager() = pluginManager
-    fun getTemplateManager() = templateManager
-    fun getUpdateScheduler() = updateScheduler
-    fun getConfig() = config
-    fun getAPI() = api
+    private fun isVelocityCTDService(service: ICloudService): Boolean {
+        val serviceName = service.getName().lowercase()
+        val groupName = service.getServiceGroup().getName().lowercase()
 
-    fun reloadConfig() {
-        try {
-            loadConfiguration()
-            updateScheduler.updateConfig(config)
+        if (serviceName.contains("velocityctd") || groupName.contains("velocityctd") ||
+            serviceName.contains("velocity-ctd") || groupName.contains("velocity-ctd") ||
+            serviceName.contains("ctd") || groupName.contains("ctd")) {
+            return true
+        }
+
+        return try {
+            val serviceVersionName = service.getServiceVersion().name.uppercase()
+            serviceVersionName.startsWith("VELOCITYCTD")
         } catch (e: Exception) {
-            e.printStackTrace()
+            false
         }
     }
 }
