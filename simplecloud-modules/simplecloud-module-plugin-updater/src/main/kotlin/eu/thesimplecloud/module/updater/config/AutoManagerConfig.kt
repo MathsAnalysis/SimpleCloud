@@ -9,7 +9,8 @@ data class AutoManagerConfig(
     val enableTemplateSync: Boolean = true,
     val enableNotifications: Boolean = false,
     val enableBackup: Boolean = true,
-    val updateInterval: String = "6h",
+    val updateInterval: String = "24h",
+    val updateTime: String = "04:00",  // New field for scheduled time (24h format)
     val serverSoftware: List<String> = listOf("paper", "leaf"),
     val plugins: List<PluginConfig> = emptyList(),
     val templates: TemplateConfig = TemplateConfig()
@@ -36,6 +37,7 @@ data class AutoManagerConfig(
             "enableNotifications" to enableNotifications,
             "enableBackup" to enableBackup,
             "updateInterval" to updateInterval,
+            "updateTime" to updateTime,
             "serverSoftware" to serverSoftware,
             "plugins" to plugins.map { plugin ->
                 mapOf(
@@ -60,7 +62,8 @@ data class AutoManagerConfig(
             val enableTemplateSync = jsonLib.getBoolean("enableTemplateSync") ?: true
             val enableNotifications = jsonLib.getBoolean("enableNotifications") ?: false
             val enableBackup = jsonLib.getBoolean("enableBackup") ?: true
-            val updateInterval = jsonLib.getString("updateInterval") ?: "6h"
+            val updateInterval = jsonLib.getString("updateInterval") ?: "24h"
+            val updateTime = jsonLib.getString("updateTime") ?: "04:00"
 
             val serverSoftwareArray = jsonLib.getAsJsonArray("serverSoftware")
             val serverSoftware = serverSoftwareArray?.map { it.asString } ?: listOf("paper", "leaf")
@@ -94,6 +97,7 @@ data class AutoManagerConfig(
                 enableNotifications = enableNotifications,
                 enableBackup = enableBackup,
                 updateInterval = updateInterval,
+                updateTime = updateTime,
                 serverSoftware = serverSoftware,
                 plugins = plugins,
                 templates = templates
