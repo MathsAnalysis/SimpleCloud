@@ -9,7 +9,6 @@ import eu.thesimplecloud.api.service.version.loader.LocalServiceVersionHandler
 import eu.thesimplecloud.api.service.version.type.ServiceAPIType
 import eu.thesimplecloud.base.manager.serviceversion.ManagerServiceVersionHandler
 import eu.thesimplecloud.jsonlib.JsonLib
-import eu.thesimplecloud.module.updater.bootstrap.PluginUpdaterModule
 import eu.thesimplecloud.module.updater.config.AutoManagerConfig
 import kotlinx.coroutines.*
 import java.io.File
@@ -17,7 +16,6 @@ import java.net.URL
 import java.util.concurrent.ConcurrentHashMap
 
 class ServerVersionManager(
-    private val module: PluginUpdaterModule,
     private val config: AutoManagerConfig
 ) {
 
@@ -40,11 +38,6 @@ class ServerVersionManager(
     private val versionsCache = ConcurrentHashMap<String, ServerVersionEntry>()
     private val supervisorJob = SupervisorJob()
     private val coroutineScope = CoroutineScope(Dispatchers.IO + supervisorJob)
-
-    companion object {
-        private const val VALIDATION_TIMEOUT = 10000
-        private const val MAX_PARALLEL_VALIDATIONS = 3
-    }
 
     suspend fun updateAllVersions(): Boolean = withContext(Dispatchers.IO) {
         return@withContext supervisorJob.runCatching {
@@ -75,15 +68,6 @@ class ServerVersionManager(
             logger("Fatal error during version update: ${error.message}")
             error.printStackTrace()
             false
-        }
-    }
-
-    suspend fun updateSingleVersion(name: String): ServerVersionEntry? = withContext(Dispatchers.IO) {
-        return@withContext when (name.lowercase()) {
-            "paper" -> updatePaper()
-            "leaf" -> updateLeaf()
-            "velocityctd" -> createVelocityCTDEntry()
-            else -> null
         }
     }
 
@@ -130,93 +114,74 @@ class ServerVersionManager(
         }
     }
 
+
     private suspend fun updateLeaf(): ServerVersionEntry = withContext(Dispatchers.IO) {
         try {
-            logger("Using mcjars.app stable URLs for Leaf (GitHub is unreliable)...")
+            logger("Fetching Leaf versions with automatic build detection...")
 
-            // Skip GitHub completely - use only known stable URLs
-            val stableVersions = getKnownModernLeafVersions()
+            // Try to get latest versions from GitHub API first
+            val githubVersions = fetchGitHubLeafVersions()
+            val knownVersions = getKnownLeafVersions()
 
-            if (stableVersions.isEmpty()) {
+            // Merge GitHub versions with known working versions
+            val allVersions = mergeLeafVersions(githubVersions, knownVersions)
+            val finalVersions = allVersions.values.sortedWith { a, b ->
+                compareVersions(b.version, a.version)
+            }.take(10)
+
+            if (finalVersions.isEmpty()) {
                 return@withContext createFallbackLeafEntry()
             }
 
-            // Sort by version (newest first)
-            val sortedVersions = stableVersions.sortedWith { a, b ->
-                compareVersions(b.version, a.version)
-            }
+            val latestVersion = finalVersions.firstOrNull()?.version ?: "1.21.7"
 
-            val latestVersion = sortedVersions.firstOrNull()?.version ?: "1.21.7"
-
-            logger("Successfully configured ${sortedVersions.size} Leaf versions from mcjars.app")
+            logger("Successfully configured ${finalVersions.size} Leaf versions")
             logger("Latest version: $latestVersion")
 
-            ServerVersionEntry("Leaf", "SERVER", false, latestVersion, sortedVersions)
+            ServerVersionEntry("Leaf", "SERVER", false, latestVersion, finalVersions)
 
         } catch (e: Exception) {
             logger("Error configuring Leaf versions: ${e.message}")
             createFallbackLeafEntry()
         }
     }
-    private suspend fun fetchPaperVersions(): List<String> = withContext(Dispatchers.IO) {
-        val response = URL("https://api.papermc.io/v2/projects/paper").readText()
-        val data = JsonLib.fromJsonString(response)
-        return@withContext data.getAsJsonArray("versions")?.map { it.asString } ?: emptyList()
-    }
 
-    private suspend fun createPaperDownloadLinks(versions: List<String>): List<VersionDownload> {
-        return versions.takeLast(10).reversed().map { version ->
-            coroutineScope.async { createPaperVersionDownload(version) }
-        }.awaitAll()
-    }
+    private fun getKnownLeafVersions(): List<VersionDownload> = listOf(
+        // Fallback URLs that are known to work
+        VersionDownload("1.21.6", "https://s3.mcjars.app/leaf/1.21.6/19/server.jar?minecraft_version=1.21.6&build=19"),
+        VersionDownload("1.21.5", "https://s3.mcjars.app/leaf/1.21.5/62/server.jar?minecraft_version=1.21.5&build=62"),
+        VersionDownload("1.21.4", "https://s3.mcjars.app/leaf/1.21.4/502/server.jar?minecraft_version=1.21.4&build=502"),
+        VersionDownload("1.21.3", "https://s3.mcjars.app/leaf/1.21.3/1.21.3-e380e4b5/server.jar?minecraft_version=1.21.3&build=1"),
+        VersionDownload("1.21.1", "https://s3.mcjars.app/leaf/1.21.1/1.21.1-24093972/server.jar?minecraft_version=1.21.1&build=1"),
+        VersionDownload("1.20.4", "https://s3.mcjars.app/leaf/1.20.4/1.20.4-6d332992/server.jar?minecraft_version=1.20.4&build=1")
+    )
 
-    private suspend fun createPaperVersionDownload(version: String): VersionDownload = withContext(Dispatchers.IO) {
-        val buildsResponse = URL("https://api.papermc.io/v2/projects/paper/versions/$version").readText()
-        val buildsData = JsonLib.fromJsonString(buildsResponse)
-        val builds = buildsData.getAsJsonArray("builds")!!
-        val latestBuild = builds.last().asString
+    private fun mergeLeafVersions(
+        githubVersions: List<VersionDownload>,
+        knownVersions: List<VersionDownload>
+    ): Map<String, VersionDownload> {
+        val allVersions = mutableMapOf<String, VersionDownload>()
 
-        VersionDownload(
-            version = version,
-            link = "https://api.papermc.io/v2/projects/paper/versions/$version/builds/$latestBuild/downloads/paper-$version-$latestBuild.jar"
-        )
-    }
-
-    internal suspend fun downloadServiceVersionJar(serviceVersion: ServiceVersion) = withContext(Dispatchers.IO) {
-        try {
-            val jarFile = File(DirectoryPaths.paths.minecraftJarsPath + serviceVersion.name + ".jar")
-
-            if (jarFile.exists()) {
-                logger("JAR already exists for ${serviceVersion.name}")
-                return@withContext
-            }
-
-            logger("Downloading JAR for ${serviceVersion.name} from: ${serviceVersion.downloadURL}")
-
-            jarFile.parentFile.mkdirs()
-
-            val connection = URL(serviceVersion.downloadURL).openConnection()
-            connection.setRequestProperty("User-Agent", "SimpleCloud-AutoUpdater/1.0")
-            connection.connectTimeout = 30000
-            connection.readTimeout = 60000
-
-            connection.getInputStream().use { input ->
-                jarFile.outputStream().use { output ->
-                    input.copyTo(output)
-                }
-            }
-
-            logger("Successfully downloaded ${serviceVersion.name} (${jarFile.length()} bytes)")
-
-        } catch (e: Exception) {
-            logger("Failed to download JAR for ${serviceVersion.name}: ${e.message}")
-            e.printStackTrace()
+        // Start with known versions as base
+        knownVersions.forEach { version ->
+            allVersions[version.version] = version
+            logger("Added known version: ${version.version}")
         }
+
+        // Override with GitHub versions if they exist (they are more up-to-date)
+        githubVersions.filter { isModernLeafVersion(it.version) }.forEach { githubVersion ->
+            allVersions[githubVersion.version] = githubVersion
+            logger("Updated with GitHub version: ${githubVersion.version}")
+        }
+
+        logger("Total merged versions: ${allVersions.size} (${githubVersions.size} from GitHub, ${knownVersions.size} known)")
+
+        return allVersions
     }
 
     private suspend fun fetchGitHubLeafVersions(): List<VersionDownload> = withContext(Dispatchers.IO) {
         try {
-            val response = URL("https://api.github.com/repos/Winds-Studio/Leaf/releases?per_page=25").readText()
+            val response = URL("https://api.github.com/repos/Winds-Studio/Leaf/releases?per_page=15").readText()
             val jsonLib = JsonLib.fromJsonString(response)
             val releases = jsonLib.jsonElement as? JsonArray ?: return@withContext emptyList()
 
@@ -262,6 +227,7 @@ class ServerVersionManager(
                 }
             }
 
+            // Prioritize jar files with build numbers
             val priorityJar = jarAssets.firstOrNull { it.first.matches(Regex("leaf-$version-\\d+\\.jar")) }
                 ?: jarAssets.firstOrNull { it.first == "leaf-$version.jar" }
                 ?: jarAssets.firstOrNull()
@@ -277,151 +243,108 @@ class ServerVersionManager(
     }
 
 
-    private fun getKnownModernLeafVersions(): List<VersionDownload> = listOf(
-        VersionDownload("1.21.7", "https://s3.mcjars.app/leaf/1.21.7/latest/server.jar"),
-        VersionDownload("1.21.6", "https://s3.mcjars.app/leaf/1.21.6/latest/server.jar"),
-        VersionDownload("1.21.5", "https://s3.mcjars.app/leaf/1.21.5/latest/server.jar"),
-        VersionDownload("1.21.4", "https://s3.mcjars.app/leaf/1.21.4/latest/server.jar"),
-        VersionDownload("1.21.3", "https://s3.mcjars.app/leaf/1.21.3/latest/server.jar"),
-        VersionDownload("1.21.1", "https://s3.mcjars.app/leaf/1.21.1/latest/server.jar"),
-        VersionDownload("1.21", "https://s3.mcjars.app/leaf/1.21/latest/server.jar"),
-        VersionDownload("1.20.6", "https://s3.mcjars.app/leaf/1.20.6/latest/server.jar"),
-        VersionDownload("1.20.4", "https://s3.mcjars.app/leaf/1.20.4/latest/server.jar"),
-        VersionDownload("1.20.2", "https://s3.mcjars.app/leaf/1.20.2/latest/server.jar")
-    )
+    private suspend fun fetchPaperVersions(): List<String> = withContext(Dispatchers.IO) {
+        val response = URL("https://api.papermc.io/v2/projects/paper").readText()
+        val data = JsonLib.fromJsonString(response)
+        return@withContext data.getAsJsonArray("versions")?.map { it.asString } ?: emptyList()
+    }
 
+    private suspend fun createPaperDownloadLinks(versions: List<String>): List<VersionDownload> {
+        return versions.takeLast(10).reversed().map { version ->
+            coroutineScope.async { createPaperVersionDownload(version) }
+        }.awaitAll()
+    }
 
+    private suspend fun createPaperVersionDownload(version: String): VersionDownload = withContext(Dispatchers.IO) {
+        val buildsResponse = URL("https://api.papermc.io/v2/projects/paper/versions/$version").readText()
+        val buildsData = JsonLib.fromJsonString(buildsResponse)
+        val builds = buildsData.getAsJsonArray("builds")!!
+        val latestBuild = builds.last().asString
 
-    private fun mergeLeafVersions(
-        githubVersions: List<VersionDownload>,
-        knownVersions: List<VersionDownload>
-    ): Map<String, VersionDownload> {
-        val allVersions = mutableMapOf<String, VersionDownload>()
+        VersionDownload(
+            version = version,
+            link = "https://api.papermc.io/v2/projects/paper/versions/$version/builds/$latestBuild/downloads/paper-$version-$latestBuild.jar"
+        )
+    }
 
-        // Start with known versions as base
-        knownVersions.forEach { version ->
-            allVersions[version.version] = version
-            logger("Added known version: ${version.version}")
+    private fun isModernLeafVersion(version: String): Boolean {
+        return when {
+            version.startsWith("1.21") -> true
+            version.startsWith("1.20") -> true
+            version.matches(Regex("\\d{6}")) -> false
+            version.contains("purpur", ignoreCase = true) -> false
+            version.contains("Mirai", ignoreCase = true) -> false
+            version.contains("Prismarine", ignoreCase = true) -> false
+            else -> extractMinecraftVersion(version)?.let {
+                it.startsWith("1.21") || it.startsWith("1.20")
+            } ?: false
         }
+    }
 
-        // Only override with GitHub versions if they are newer or equal
-        githubVersions.filter { isModernLeafVersion(it.version) }.forEach { githubVersion ->
-            val existingVersion = allVersions[githubVersion.version]
+    private fun extractMinecraftVersion(version: String): String? {
+        return try {
+            val versionRegex = Regex("(1\\.(2[01])(\\.\\d+)?)")
+            versionRegex.find(version)?.value
+        } catch (e: Exception) {
+            null
+        }
+    }
 
-            if (existingVersion == null) {
-                // New version from GitHub
-                allVersions[githubVersion.version] = githubVersion
-                logger("Added new GitHub version: ${githubVersion.version}")
+    internal suspend fun downloadServiceVersionJar(serviceVersion: ServiceVersion) = withContext(Dispatchers.IO) {
+        try {
+            val jarFile = File(DirectoryPaths.paths.minecraftJarsPath + serviceVersion.name + ".jar")
+
+            if (jarFile.exists()) {
+                logger("JAR already exists for ${serviceVersion.name}")
+                return@withContext
+            }
+
+            logger("Downloading JAR for ${serviceVersion.name} from: ${serviceVersion.downloadURL}")
+            jarFile.parentFile.mkdirs()
+
+            val connection = URL(serviceVersion.downloadURL).openConnection()
+            connection.setRequestProperty("User-Agent", "SimpleCloud-AutoUpdater/1.0")
+            connection.setRequestProperty("Accept", "application/java-archive,application/octet-stream,*/*")
+            connection.connectTimeout = 30000
+            connection.readTimeout = 60000
+
+            // Check response code
+            val responseCode = if (connection is java.net.HttpURLConnection) {
+                connection.responseCode
             } else {
-                // Compare versions - only use GitHub if it's same or newer
-                val comparison = compareVersions(githubVersion.version, existingVersion.version)
-                if (comparison >= 0) {
-                    allVersions[githubVersion.version] = githubVersion
-                    logger("Updated with GitHub version: ${githubVersion.version}")
-                } else {
-                    logger("Kept known version over older GitHub version: ${existingVersion.version}")
+                200
+            }
+
+            if (responseCode == 404) {
+                logger("File not found (404) for ${serviceVersion.name}: ${serviceVersion.downloadURL}")
+                return@withContext
+            }
+
+            if (responseCode !in 200..299) {
+                logger("Bad response code $responseCode for ${serviceVersion.name}: ${serviceVersion.downloadURL}")
+                return@withContext
+            }
+
+            connection.getInputStream().use { input ->
+                jarFile.outputStream().use { output ->
+                    input.copyTo(output)
                 }
             }
-        }
 
-        logger("Total merged versions: ${allVersions.size} (${githubVersions.size} from GitHub, ${knownVersions.size} known)")
-
-        // Debug: print all versions
-        allVersions.keys.sorted().forEach { version ->
-            logger("Final version: $version -> ${allVersions[version]?.link}")
-        }
-
-        return allVersions
-    }
-
-    private fun sortAndLimitVersions(versions: Map<String, VersionDownload>): List<VersionDownload> {
-        return versions.values.sortedWith { a, b ->
-            val comparison = compareVersions(b.version, a.version)
-            logger("Comparing ${b.version} vs ${a.version}: $comparison")
-            comparison
-        }.take(10).also { sortedList ->
-            logger("Sorted versions order:")
-            sortedList.forEachIndexed { index, version ->
-                logger("  ${index + 1}. ${version.version} -> ${version.link}")
+            if (jarFile.exists() && jarFile.length() > 1000000) {
+                logger("Successfully downloaded ${serviceVersion.name} (${jarFile.length()} bytes)")
+            } else {
+                logger("Download completed but file seems too small: ${jarFile.length()} bytes")
+                jarFile.delete()
             }
+
+        } catch (e: Exception) {
+            logger("Failed to download JAR for ${serviceVersion.name}: ${e.message}")
+            e.printStackTrace()
         }
     }
 
 
-    private suspend fun validateDownloadLinks(versions: List<VersionDownload>): List<VersionDownload> =
-        withContext(Dispatchers.IO) {
-            val workingVersions = mutableListOf<VersionDownload>()
-            val validatedVersions = mutableSetOf<String>()
-
-            logger("Validating download links for ${versions.size} versions...")
-
-            // Validate first few URLs in parallel
-            val validationResults = versions.take(MAX_PARALLEL_VALIDATIONS).map { version ->
-                coroutineScope.async { validateSingleDownloadLink(version) }
-            }.awaitAll()
-
-            validationResults.forEach { (version, isValid) ->
-                if (isValid && !validatedVersions.contains(version.version)) {
-                    workingVersions.add(version)
-                    validatedVersions.add(version.version)
-                }
-            }
-
-            // Add remaining versions without validation
-            versions.drop(MAX_PARALLEL_VALIDATIONS).forEach { version ->
-                if (!validatedVersions.contains(version.version)) {
-                    workingVersions.add(version)
-                }
-            }
-
-            if (workingVersions.isEmpty()) {
-                logger("No links validated successfully, returning all versions as fallback")
-                return@withContext versions
-            }
-
-            logger("Validation complete: ${workingVersions.filter { validatedVersions.contains(it.version) }.size} validated, ${workingVersions.size} total")
-            return@withContext workingVersions
-        }
-
-    private suspend fun validateSingleDownloadLink(version: VersionDownload): Pair<VersionDownload, Boolean> =
-        withContext(Dispatchers.IO) {
-            try {
-                logger("Validating ${version.version}: ${version.link}")
-
-                val connection = URL(version.link).openConnection()
-                connection.setRequestProperty("User-Agent", "SimpleCloud-AutoUpdater/1.0")
-                connection.setRequestProperty("Accept", "application/java-archive,application/octet-stream,*/*")
-                connection.connectTimeout = VALIDATION_TIMEOUT
-                connection.readTimeout = VALIDATION_TIMEOUT
-
-                val responseCode = if (connection is java.net.HttpURLConnection) {
-                    connection.responseCode
-                } else {
-                    200
-                }
-
-                val contentLength = connection.contentLength
-                val contentType = connection.contentType
-
-                val isValid = when {
-                    responseCode !in 200..299 -> false
-                    contentLength > 0 && contentLength < 1000000 -> false
-                    contentType != null && contentType.contains("text/html") -> false
-                    else -> true
-                }
-
-                if (isValid) {
-                    logger("✅ Valid link for ${version.version} (Response: $responseCode, Size: ${if (contentLength > 0) "${contentLength} bytes" else "Unknown"}, Type: $contentType)")
-                } else {
-                    logger("❌ Invalid link for ${version.version}: Response $responseCode, Size: $contentLength, Type: $contentType")
-                }
-
-                Pair(version, isValid)
-            } catch (e: Exception) {
-                logger("Failed to validate link for ${version.version}: ${e.message}")
-                Pair(version, false)
-            }
-        }
 
     private suspend fun downloadExternalServerVersions(): List<ServerVersionEntry> = withContext(Dispatchers.IO) {
         val externalEntries = mutableListOf<ServerVersionEntry>()
@@ -627,6 +550,7 @@ class ServerVersionManager(
                 val existingVersion = serviceVersionHandler.getServiceVersionByName(versionName)
 
                 if (existingVersion == null) {
+                    // Create new version
                     val serviceVersion = ServiceVersion(
                         name = versionName,
                         serviceAPIType = ServiceAPIType.SPIGOT,
@@ -637,18 +561,53 @@ class ServerVersionManager(
                     localServiceVersionHandler.saveServiceVersion(serviceVersion)
                     registeredVersions[versionName] = serviceVersion
 
-                    // IMPROVED DOWNLOAD LOGIC
-                    downloadJarWithRetry(serviceVersion)
-
+                    downloadServiceVersionJar(serviceVersion)
                     registeredCount++
-                    logger("Registered Leaf version: $versionName -> ${version.link}")
-                } else {
-                    logger("Leaf version already exists: $versionName")
+                    logger("Registered new Leaf version: $versionName -> ${version.link}")
 
-                    // Check if JAR exists for existing version
-                    val jarFile = File(DirectoryPaths.paths.minecraftJarsPath + existingVersion.name + ".jar")
+                } else {
+                    // Check if existing version has different URL (auto-update builds)
+                    if (existingVersion.downloadURL != version.link) {
+                        logger("Updating build URL for existing version: $versionName")
+                        logger("Old URL: ${existingVersion.downloadURL}")
+                        logger("New URL: ${version.link}")
+
+                        // Create updated version with new URL
+                        val updatedVersion = ServiceVersion(
+                            name = versionName,
+                            serviceAPIType = ServiceAPIType.SPIGOT,
+                            downloadURL = version.link,
+                            isPaperClip = false
+                        )
+
+                        // Save the updated version
+                        localServiceVersionHandler.saveServiceVersion(updatedVersion)
+                        registeredVersions[versionName] = updatedVersion
+
+                        // Remove old JAR and download new one
+                        val jarFile = File(DirectoryPaths.paths.minecraftJarsPath + versionName + ".jar")
+                        if (jarFile.exists()) {
+                            jarFile.delete()
+                            logger("Removed old JAR for update")
+                        }
+
+                        downloadServiceVersionJar(updatedVersion)
+                        logger("Updated Leaf version: $versionName -> ${version.link}")
+                        registeredCount++
+                    } else {
+                        logger("Leaf version already exists with current URL: $versionName")
+                    }
+
+                    // Always check if JAR file exists
+                    val jarFile = File(DirectoryPaths.paths.minecraftJarsPath + versionName + ".jar")
                     if (!jarFile.exists()) {
-                        downloadJarWithRetry(existingVersion)
+                        val versionToDownload = ServiceVersion(
+                            name = versionName,
+                            serviceAPIType = ServiceAPIType.SPIGOT,
+                            downloadURL = version.link,
+                            isPaperClip = false
+                        )
+                        downloadServiceVersionJar(versionToDownload)
                     }
                 }
             } catch (e: Exception) {
@@ -662,99 +621,8 @@ class ServerVersionManager(
             managerServiceVersionHandler.reloadServiceVersions()
         }
 
-        logger("Leaf registration complete. Registered: $registeredCount versions")
+        logger("Leaf registration complete. Updated/Registered: $registeredCount versions")
     }
-
-    private suspend fun downloadJarWithRetry(serviceVersion: ServiceVersion) = withContext(Dispatchers.IO) {
-        val jarFile = File(DirectoryPaths.paths.minecraftJarsPath + serviceVersion.name + ".jar")
-
-        if (jarFile.exists()) {
-            logger("JAR already exists for ${serviceVersion.name}")
-            return@withContext
-        }
-
-        logger("Downloading JAR for ${serviceVersion.name} from: ${serviceVersion.downloadURL}")
-        jarFile.parentFile.mkdirs()
-
-        try {
-            val connection = URL(serviceVersion.downloadURL).openConnection()
-            connection.setRequestProperty("User-Agent", "SimpleCloud-AutoUpdater/1.0")
-            connection.connectTimeout = 30000
-            connection.readTimeout = 60000
-
-            connection.getInputStream().use { input ->
-                jarFile.outputStream().use { output ->
-                    input.copyTo(output)
-                }
-            }
-
-            if (jarFile.exists() && jarFile.length() > 1000000) {
-                logger("Successfully downloaded ${serviceVersion.name} (${jarFile.length()} bytes)")
-            } else {
-                logger("Download completed but file seems too small: ${jarFile.length()} bytes")
-                jarFile.delete()
-            }
-
-        } catch (e: Exception) {
-            logger("Failed to download JAR for ${serviceVersion.name}: ${e.message}")
-            if (jarFile.exists()) {
-                jarFile.delete()
-            }
-        }
-    }
-
-    private fun downloadWithBasicHeaders(url: String, targetFile: File) {
-        val connection = URL(url).openConnection()
-        connection.setRequestProperty("User-Agent", "SimpleCloud-AutoUpdater/1.0")
-        connection.connectTimeout = 15000
-        connection.readTimeout = 60000
-
-        connection.getInputStream().use { input ->
-            targetFile.outputStream().use { output ->
-                input.copyTo(output)
-            }
-        }
-    }
-
-    private fun downloadWithCurlUserAgent(url: String, targetFile: File) {
-        val connection = URL(url).openConnection()
-        connection.setRequestProperty("User-Agent", "curl/7.68.0")
-        connection.setRequestProperty("Accept", "*/*")
-        connection.connectTimeout = 15000
-        connection.readTimeout = 60000
-
-        connection.getInputStream().use { input ->
-            targetFile.outputStream().use { output ->
-                input.copyTo(output)
-            }
-        }
-    }
-
-    private fun downloadWithRedirectFollow(url: String, targetFile: File) {
-        val connection = URL(url).openConnection() as java.net.HttpURLConnection
-        connection.setRequestProperty("User-Agent", "Mozilla/5.0 (SimpleCloud)")
-        connection.setRequestProperty("Accept", "application/java-archive,application/octet-stream,*/*")
-        connection.instanceFollowRedirects = true
-        connection.connectTimeout = 15000
-        connection.readTimeout = 60000
-
-        // Handle redirects manually if needed
-        var finalConnection = connection
-        if (connection.responseCode in 300..399) {
-            val redirectUrl = connection.getHeaderField("Location")
-            if (redirectUrl != null) {
-                finalConnection = URL(redirectUrl).openConnection() as java.net.HttpURLConnection
-                finalConnection.setRequestProperty("User-Agent", "Mozilla/5.0 (SimpleCloud)")
-            }
-        }
-
-        finalConnection.inputStream.use { input ->
-            targetFile.outputStream().use { output ->
-                input.copyTo(output)
-            }
-        }
-    }
-
 
     private suspend fun registerVelocityCTDVersions(versions: List<VersionDownload>) = withContext(Dispatchers.IO) {
         logger("Registering ${versions.size} VelocityCTD versions...")
@@ -825,59 +693,6 @@ class ServerVersionManager(
         logger("VelocityCTD registration complete. Registered: $registeredCount versions")
     }
 
-    suspend fun unregisterOldVersions(keepVersions: List<String>) = withContext(Dispatchers.IO) {
-        val serviceVersionHandler = CloudAPI.instance.getServiceVersionHandler()
-
-        try {
-            val allVersions = serviceVersionHandler.getAllVersions()
-            val toRemove = allVersions.filter { version ->
-                (version.name.startsWith("LEAF_") ||
-                        version.name.startsWith("VELOCITYCTD_")) &&
-                        !keepVersions.contains(version.name)
-            }
-
-            var removedCount = 0
-            toRemove.forEach { version ->
-                try {
-                    val managerServiceVersionHandler = serviceVersionHandler as ManagerServiceVersionHandler
-                    managerServiceVersionHandler.deleteServiceVersion(version.name)
-                    registeredVersions.remove(version.name)
-                    removedCount++
-                    logger("Removed old version: ${version.name}")
-                } catch (e: Exception) {
-                    logger("Failed to remove version ${version.name}: ${e.message}")
-                }
-            }
-
-            logger("Cleanup complete. Removed $removedCount old versions")
-        } catch (e: Exception) {
-            logger("Error during version cleanup: ${e.message}")
-        }
-    }
-
-    private fun isModernLeafVersion(version: String): Boolean {
-        return when {
-            version.startsWith("1.21") -> true
-            version.startsWith("1.20") -> true
-            version.matches(Regex("\\d{6}")) -> false
-            version.contains("purpur", ignoreCase = true) -> false
-            version.contains("Mirai", ignoreCase = true) -> false
-            version.contains("Prismarine", ignoreCase = true) -> false
-            else -> extractMinecraftVersion(version)?.let {
-                it.startsWith("1.21") || it.startsWith("1.20")
-            } ?: false
-        }
-    }
-
-    private fun extractMinecraftVersion(version: String): String? {
-        return try {
-            val versionRegex = Regex("(1\\.(2[01])(\\.\\d+)?)")
-            versionRegex.find(version)?.value
-        } catch (e: Exception) {
-            null
-        }
-    }
-
     private fun compareVersions(version1: String, version2: String): Int {
         return try {
             logger("Comparing versions: $version1 vs $version2")
@@ -929,13 +744,12 @@ class ServerVersionManager(
         return ServerVersionEntry(
             "Leaf", "SERVER", false, "1.21.7",
             listOf(
-                VersionDownload("1.21.7", "https://s3.mcjars.app/leaf/1.21.7/latest/server.jar"),
-                VersionDownload("1.21.6", "https://s3.mcjars.app/leaf/1.21.6/latest/server.jar"),
-                VersionDownload("1.21.5", "https://s3.mcjars.app/leaf/1.21.5/latest/server.jar")
+                VersionDownload("1.21.7", "https://github.com/Winds-Studio/Leaf/releases/download/ver-1.21.7/leaf-1.21.7-10.jar"),
+                VersionDownload("1.21.6", "https://s3.mcjars.app/leaf/1.21.6/19/server.jar?minecraft_version=1.21.6&build=19"),
+                VersionDownload("1.21.5", "https://s3.mcjars.app/leaf/1.21.5/62/server.jar?minecraft_version=1.21.5&build=62")
             )
         )
     }
-
     private fun createVelocityCTDEntry(): ServerVersionEntry {
         return ServerVersionEntry(
             name = "VelocityCTD",
@@ -1058,43 +872,17 @@ class ServerVersionManager(
         }
     }
 
-    fun getVersionByName(name: String): ServerVersionEntry? {
-        return versionsCache[name.lowercase()] ?: getCurrentVersions().find {
-            it.name.equals(name, ignoreCase = true)
-        }
-    }
 
-    fun getAllRegisteredVersionNames(): List<String> {
-        return try {
-            val serviceVersionHandler = CloudAPI.instance.getServiceVersionHandler()
-            val allVersions = serviceVersionHandler.getAllVersions()
+    private fun getReliableLeafVersions(): List<VersionDownload> = listOf(
+        VersionDownload("1.21.7", "https://github.com/Winds-Studio/Leaf/releases/download/ver-1.21.7/leaf-1.21.7-1.jar"),
+        VersionDownload("1.21.6", "https://s3.mcjars.app/leaf/1.21.6/19/server.jar?minecraft_version=1.21.6&build=19"),
+        VersionDownload("1.21.5", "https://s3.mcjars.app/leaf/1.21.5/62/server.jar?minecraft_version=1.21.5&build=62"),
+        VersionDownload("1.21.4", "https://s3.mcjars.app/leaf/1.21.4/502/server.jar?minecraft_version=1.21.4&build=502"),
+        VersionDownload("1.21.3", "https://s3.mcjars.app/leaf/1.21.3/1.21.3-e380e4b5/server.jar?minecraft_version=1.21.3&build=1"),
+        VersionDownload("1.21.1", "https://s3.mcjars.app/leaf/1.21.1/1.21.1-24093972/server.jar?minecraft_version=1.21.1&build=1"),
+        VersionDownload("1.20.4", "https://s3.mcjars.app/leaf/1.20.4/1.20.4-6d332992/server.jar?minecraft_version=1.20.4&build=1")
+    )
 
-            allVersions.filter { version ->
-                version.name.startsWith("LEAF_") || version.name.startsWith("VELOCITYCTD_")
-            }.map { version ->
-                version.name
-            }.sorted().distinct().also {
-                logger("Found ${it.size} registered versions: $it")
-            }
-        } catch (e: Exception) {
-            logger("Error getting registered versions: ${e.message}")
-            emptyList()
-        }
-    }
-
-    private fun createManualLeafVersions(): List<VersionDownload> {
-        return listOf(
-            VersionDownload("1.21.7", "https://s3.mcjars.app/leaf/1.21.7/latest/server.jar"),
-            VersionDownload("1.21.6", "https://s3.mcjars.app/leaf/1.21.6/latest/server.jar"),
-            VersionDownload("1.21.5", "https://s3.mcjars.app/leaf/1.21.5/latest/server.jar"),
-            VersionDownload("1.21.4", "https://s3.mcjars.app/leaf/1.21.4/latest/server.jar")
-        )
-    }
-    fun getRegisteredVersions(): List<ServiceVersion> = registeredVersions.values.toList()
-
-    fun cleanup() {
-        supervisorJob.cancel()
-    }
 
     private fun logger(message: String) {
         println("[ServerVersionManager] $message")
