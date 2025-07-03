@@ -186,7 +186,10 @@ class TemplateManager(
             }
 
             val latestDownload = velocityEntry.downloadLinks.first()
-            val velocityJarFile = File(DirectoryPaths.paths.minecraftJarsPath + "VelocityCTD.jar")
+
+            // FIXED: Use proper ServiceVersion name format
+            val versionName = sanitizeVersionName("VELOCITYCTD_${latestDownload.version}")
+            val velocityJarFile = File(DirectoryPaths.paths.minecraftJarsPath + "${versionName}.jar")
 
             velocityJarFile.parentFile.mkdirs()
 
@@ -196,7 +199,7 @@ class TemplateManager(
                 }
             }
 
-            println("[TemplateManager] VelocityCTD ${latestDownload.version} updated")
+            println("[TemplateManager] VelocityCTD ${latestDownload.version} updated as ${versionName}.jar")
             true
         } catch (e: Exception) {
             println("[TemplateManager] Error updateBaseVelocityCTDJar: ${e.message}")
@@ -342,35 +345,6 @@ class TemplateManager(
         }
     }
 
-    private suspend fun updateVelocityCTDJar(serviceDir: File) = withContext(Dispatchers.IO) {
-        try {
-            println("[TemplateManager] Updating VelocityCTD jar...")
-
-            val serverVersionManager = module.getServerVersionManager()
-            val velocityCTDVersions = serverVersionManager.getCurrentVersions().find { it.name == "VelocityCTD" }
-
-            if (velocityCTDVersions != null && velocityCTDVersions.downloadLinks.isNotEmpty()) {
-                val latestDownload = velocityCTDVersions.downloadLinks.first()
-                val jarFile = File(serviceDir, "velocity.jar")
-
-                println("[TemplateManager] Downloading VelocityCTD ${latestDownload.version} from: ${latestDownload.link}")
-
-                URL(latestDownload.link).openStream().use { input ->
-                    jarFile.outputStream().use { output ->
-                        input.copyTo(output)
-                    }
-                }
-
-                println("[TemplateManager] VelocityCTD jar updated successfully to version ${latestDownload.version}")
-            } else {
-                println("[TemplateManager] No VelocityCTD version available for download")
-            }
-        } catch (e: Exception) {
-            println("[TemplateManager] Error updating VelocityCTD jar: ${e.message}")
-            e.printStackTrace()
-        }
-    }
-
     private suspend fun createBaseTemplates(): Boolean = withContext(Dispatchers.IO) {
         try {
             // Since the config doesn't define specific template names,
@@ -408,6 +382,12 @@ class TemplateManager(
             e.printStackTrace()
             return@withContext false
         }
+    }
+
+    private fun sanitizeVersionName(name: String): String {
+        return name.replace(Regex("[^a-zA-Z0-9_]"), "_")
+            .replace(Regex("_{2,}"), "_")
+            .trimEnd('_')
     }
 
     private suspend fun syncTemplate(template: ITemplate) = withContext(Dispatchers.IO) {
@@ -602,5 +582,36 @@ class TemplateManager(
         val templateName = template.getName().lowercase()
         return templateName.contains("velocityctd") || templateName.contains("velocity-ctd") ||
                 templateName.contains("ctd") || templateName.contains("proxy")
+    }
+
+    private suspend fun updateVelocityCTDJar(serviceDir: File) = withContext(Dispatchers.IO) {
+        try {
+            println("[TemplateManager] Updating VelocityCTD jar...")
+
+            val serverVersionManager = module.getServerVersionManager()
+            val velocityCTDVersions = serverVersionManager.getCurrentVersions().find { it.name == "VelocityCTD" }
+
+            if (velocityCTDVersions != null && velocityCTDVersions.downloadLinks.isNotEmpty()) {
+                val latestDownload = velocityCTDVersions.downloadLinks.first()
+
+                // Use velocity.jar for proxy services (not the minecraftJars naming)
+                val jarFile = File(serviceDir, "velocity.jar")
+
+                println("[TemplateManager] Downloading VelocityCTD ${latestDownload.version} from: ${latestDownload.link}")
+
+                URL(latestDownload.link).openStream().use { input ->
+                    jarFile.outputStream().use { output ->
+                        input.copyTo(output)
+                    }
+                }
+
+                println("[TemplateManager] VelocityCTD jar updated successfully to version ${latestDownload.version}")
+            } else {
+                println("[TemplateManager] No VelocityCTD version available for download")
+            }
+        } catch (e: Exception) {
+            println("[TemplateManager] Error updating VelocityCTD jar: ${e.message}")
+            e.printStackTrace()
+        }
     }
 }

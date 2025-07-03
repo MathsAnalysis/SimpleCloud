@@ -3,6 +3,7 @@ package eu.thesimplecloud.module.updater.config
 import eu.thesimplecloud.jsonlib.JsonLib
 
 data class AutoManagerConfig(
+    val externalSources: List<String> = emptyList(),  // NEW FIELD
     var enableAutomation: Boolean = true,
     val enableServerVersionUpdates: Boolean = true,
     val enablePluginUpdates: Boolean = true,
@@ -30,6 +31,7 @@ data class AutoManagerConfig(
 
     fun toJson(): Map<String, Any> {
         return mapOf(
+            "externalSources" to externalSources,
             "enableAutomation" to enableAutomation,
             "enableServerVersionUpdates" to enableServerVersionUpdates,
             "enablePluginUpdates" to enablePluginUpdates,
@@ -56,6 +58,9 @@ data class AutoManagerConfig(
 
     companion object {
         fun fromJson(jsonLib: JsonLib): AutoManagerConfig {
+            val externalSourcesArray = jsonLib.getAsJsonArray("externalSources")
+            val externalSources = externalSourcesArray?.map { it.asString } ?: emptyList()
+
             val enableAutomation = jsonLib.getBoolean("enableAutomation") ?: true
             val enableServerVersionUpdates = jsonLib.getBoolean("enableServerVersionUpdates") ?: true
             val enablePluginUpdates = jsonLib.getBoolean("enablePluginUpdates") ?: true
@@ -90,6 +95,7 @@ data class AutoManagerConfig(
             }
 
             return AutoManagerConfig(
+                externalSources = externalSources,
                 enableAutomation = enableAutomation,
                 enableServerVersionUpdates = enableServerVersionUpdates,
                 enablePluginUpdates = enablePluginUpdates,
