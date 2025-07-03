@@ -3,12 +3,15 @@ package eu.thesimplecloud.module.updater.bootstrap
 import eu.thesimplecloud.api.directorypaths.DirectoryPaths
 import eu.thesimplecloud.api.external.ICloudModule
 import eu.thesimplecloud.jsonlib.JsonLib
-import eu.thesimplecloud.module.updater.api.UpdaterAPI
-import eu.thesimplecloud.module.updater.commands.UpdaterCommand
-import eu.thesimplecloud.module.updater.config.AutoManagerConfig
-import eu.thesimplecloud.module.updater.manager.*
-import eu.thesimplecloud.module.updater.thread.UpdateScheduler
 import eu.thesimplecloud.launcher.startup.Launcher
+import eu.thesimplecloud.module.updater.api.UpdaterAPI
+import eu.thesimplecloud.module.updater.command.UpdaterCommand
+import eu.thesimplecloud.module.updater.config.AutoManagerConfig
+import eu.thesimplecloud.module.updater.manager.PluginManager
+import eu.thesimplecloud.module.updater.manager.ServerVersionManager
+import eu.thesimplecloud.module.updater.manager.ServiceVersionRegistrar
+import eu.thesimplecloud.module.updater.manager.TemplateManager
+import eu.thesimplecloud.module.updater.thread.UpdateScheduler
 import kotlinx.coroutines.*
 import java.io.File
 import java.time.LocalDateTime
@@ -130,7 +133,7 @@ class PluginUpdaterModule : ICloudModule {
         serverVersionManager = ServerVersionManager(this, config)
         pluginManager = PluginManager(this, config)
         templateManager = TemplateManager(this, config)
-        updateScheduler = UpdateScheduler(this)
+        updateScheduler = UpdateScheduler(this, config)
         updaterAPI = UpdaterAPI(serverVersionManager, pluginManager, templateManager)
         serviceVersionRegistrar = ServiceVersionRegistrar()
     }

@@ -3,7 +3,7 @@ package eu.thesimplecloud.module.updater.config
 import eu.thesimplecloud.jsonlib.JsonLib
 
 data class AutoManagerConfig(
-    val enableAutomation: Boolean = true,
+    var enableAutomation: Boolean = true,
     val enableServerVersionUpdates: Boolean = true,
     val enablePluginUpdates: Boolean = true,
     val enableTemplateSync: Boolean = true,

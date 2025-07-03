@@ -173,8 +173,8 @@ class Manager : ICloudApplication {
         this.templateServer.getDirectorySyncManager().setTmpZipDirectory(File(DirectoryPaths.paths.zippedTemplatesPath))
         this.templateServer.getDirectorySyncManager()
             .createDirectorySync(File(DirectoryPaths.paths.templatesPath), DirectoryPaths.paths.templatesPath)
-        this.templateServer.getDirectorySyncManager()
-            .createDirectorySync(File(DirectoryPaths.paths.modulesPath), DirectoryPaths.paths.modulesPath)
+        this.templateServer.getDirectorySyncManager().createDirectorySync(File(DirectoryPaths.paths.modulesPath), DirectoryPaths.paths.modulesPath)
+
         this.serviceHandler.startThread()
         thread(start = true, isDaemon = false) { templateServer.start() }
         VersionConversionManager().writeLastStartedVersionIfFileDoesNotExist()
@@ -196,6 +196,7 @@ class Manager : ICloudApplication {
                 "eu.thesimplecloud.base.manager.commands"
             )
         }
+
         Launcher.instance.setupManager.waitForAllSetups()
         this.wrapperFileHandler.loadAll().forEach { CloudAPI.instance.getWrapperManager().update(it) }
         this.cloudServiceGroupFileHandler.loadAll()
