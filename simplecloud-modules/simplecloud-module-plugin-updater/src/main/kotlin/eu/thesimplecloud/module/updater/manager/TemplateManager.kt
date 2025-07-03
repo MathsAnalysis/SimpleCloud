@@ -18,25 +18,10 @@ class TemplateManager(
 ) {
 
     private val templatesDirectory = File(DirectoryPaths.paths.templatesPath)
-    private var serverVersionManager: ServerVersionManager? = null
-    private var pluginManager: PluginManager? = null
-
-    fun getServerVersionManager(): ServerVersionManager {
-        if (serverVersionManager == null) {
-            serverVersionManager = ServerVersionManager(module, config)
-        }
-        return serverVersionManager!!
-    }
-
-    fun getPluginManager(): PluginManager {
-        if (pluginManager == null) {
-            pluginManager = PluginManager(module, config)
-        }
-        return pluginManager!!
-    }
 
     suspend fun syncAllTemplates(): Boolean = withContext(Dispatchers.IO) {
         return@withContext try {
+            println("[TemplateManager] Avvio sincronizzazione template...")
             var success = true
 
             if (config.templates.autoCreateBaseTemplates) {
@@ -44,11 +29,8 @@ class TemplateManager(
             }
 
             if (config.enableServerVersionUpdates) {
+                println("[TemplateManager] Aggiornamento server abilitato, avvio updateBaseJars...")
                 success = updateBaseJars() && success
-            }
-
-            if (config.enablePluginUpdates) {
-                success = getPluginManager().ensureAllPluginsDownloaded() && success
             }
 
             val templateManager = CloudAPI.instance.getTemplateManager()
@@ -57,104 +39,143 @@ class TemplateManager(
             allTemplates.forEach { template ->
                 try {
                     syncTemplate(template)
-                    syncTemplatePlugins(template)
                 } catch (e: Exception) {
                     println("[TemplateManager] Errore sync template ${template.getName()}: ${e.message}")
                     success = false
                 }
             }
 
-            if (config.enablePluginUpdates) {
-                success = syncPluginsToTemplates() && success
-            }
-
+            println("[TemplateManager] Sincronizzazione template completata con successo: $success")
             success
         } catch (e: Exception) {
             println("[TemplateManager] Errore generale syncAllTemplates: ${e.message}")
+            e.printStackTrace()
             false
         }
     }
 
     private suspend fun updateBaseJars(): Boolean = withContext(Dispatchers.IO) {
         return@withContext try {
+            println("[TemplateManager] Avvio aggiornamento base jars...")
             var success = true
 
-            val serverVersionManager = getServerVersionManager()
+            val serverVersionManager = module.getServerVersionManager()
+
+            // Prima aggiorna le versioni dall'API GitHub
+            println("[TemplateManager] Chiamando updateAllVersions...")
             val updateResult = serverVersionManager.updateAllVersions()
             if (!updateResult) {
-                println("[TemplateManager] Fallito aggiornamento versioni server")
+                println("[TemplateManager] ERRORE: Fallito aggiornamento versioni server")
                 return@withContext false
             }
 
             val currentVersions = serverVersionManager.getCurrentVersions()
+            println("[TemplateManager] Versioni disponibili: ${currentVersions.map { "${it.name}:${it.latestVersion}" }}")
 
             if (currentVersions.isEmpty()) {
-                println("[TemplateManager] Nessuna versione server disponibile")
+                println("[TemplateManager] ERRORE: Nessuna versione server disponibile")
                 return@withContext false
             }
 
             val leafVersions = currentVersions.find { it.name == "Leaf" }
             if (leafVersions != null) {
-                success = updateBaseLeafJar() && success
+                println("[TemplateManager] Trovata configurazione Leaf, avvio aggiornamento...")
+                success = updateBaseLeafJar(leafVersions) && success
+            } else {
+                println("[TemplateManager] ATTENZIONE: Configurazione Leaf non trovata")
             }
 
             val velocityCTDVersions = currentVersions.find { it.name == "VelocityCTD" }
             if (velocityCTDVersions != null) {
-                success = updateBaseVelocityCTDJar() && success
+                success = updateBaseVelocityCTDJar(velocityCTDVersions) && success
             }
 
+            println("[TemplateManager] Aggiornamento base jars completato: $success")
             success
         } catch (e: Exception) {
             println("[TemplateManager] Errore updateBaseJars: ${e.message}")
+            e.printStackTrace()
             false
         }
     }
 
-    private suspend fun updateBaseLeafJar(): Boolean = withContext(Dispatchers.IO) {
+    private suspend fun updateBaseLeafJar(leafVersionEntry: ServerVersionManager.ServerVersionEntry): Boolean = withContext(Dispatchers.IO) {
         return@withContext try {
-            val baseServerTemplate = File(templatesDirectory, "base-server")
-            if (!baseServerTemplate.exists()) {
-                baseServerTemplate.mkdirs()
+            println("[TemplateManager] === AGGIORNAMENTO LEAF INIZIATO ===")
+            println("[TemplateManager] Versione Leaf: ${leafVersionEntry.latestVersion}")
+            println("[TemplateManager] Download links disponibili: ${leafVersionEntry.downloadLinks.size}")
+
+            if (leafVersionEntry.downloadLinks.isEmpty()) {
+                println("[TemplateManager] ERRORE: Nessun link download disponibile per Leaf")
+                return@withContext false
             }
 
-            val jarFile = File(baseServerTemplate, "server.jar")
-            val leafDownloadUrl = "https://github.com/Winds-Studio/Leaf/releases/download/ver-1.21.6-dev-18/leaf-1.21.6-dev-18.jar"
+            val latestDownload = leafVersionEntry.downloadLinks.first()
+            println("[TemplateManager] Usando download: ${latestDownload.version} -> ${latestDownload.link}")
 
-            println("[TemplateManager] Download Leaf jar...")
+            // Crea directory per la versione specifica
+            val leafVersionDir = File(DirectoryPaths.paths.minecraftJarsPath + "LEAF_${latestDownload.version.replace(".", "_")}/")
+            if (!leafVersionDir.exists()) {
+                leafVersionDir.mkdirs()
+                println("[TemplateManager] Creata directory: ${leafVersionDir.absolutePath}")
+            }
 
-            URL(leafDownloadUrl).openStream().use { input ->
-                jarFile.outputStream().use { output ->
+            val paperclipFile = File(leafVersionDir, "paperclip.jar")
+
+            // Controlla se è già aggiornato
+            if (paperclipFile.exists()) {
+                val fileAge = System.currentTimeMillis() - paperclipFile.lastModified()
+                val oneDayMillis = 24 * 60 * 60 * 1000
+
+                if (fileAge < oneDayMillis) {
+                    println("[TemplateManager] Leaf ${latestDownload.version} già aggiornato (file recente)")
+                    return@withContext true
+                }
+            }
+
+            println("[TemplateManager] Avvio download Leaf ${latestDownload.version} da: ${latestDownload.link}")
+
+            // Download del JAR
+            URL(latestDownload.link).openStream().use { input ->
+                paperclipFile.outputStream().use { output ->
                     input.copyTo(output)
                 }
             }
 
-            println("[TemplateManager] Leaf aggiornato")
+            println("[TemplateManager] ✅ Leaf ${latestDownload.version} scaricato con successo!")
+            println("[TemplateManager] ✅ File salvato in: ${paperclipFile.absolutePath}")
+            println("[TemplateManager] ✅ Dimensione file: ${paperclipFile.length()} bytes")
+
+            // NON eseguire il paperclip, solo scaricarlo!
+            println("[TemplateManager] === AGGIORNAMENTO LEAF COMPLETATO ===")
+
             true
+
         } catch (e: Exception) {
-            println("[TemplateManager] Errore updateBaseLeafJar: ${e.message}")
+            println("[TemplateManager] ❌ ERRORE updateBaseLeafJar: ${e.message}")
+            e.printStackTrace()
             false
         }
     }
 
-    private suspend fun updateBaseVelocityCTDJar(): Boolean = withContext(Dispatchers.IO) {
+    private suspend fun updateBaseVelocityCTDJar(velocityEntry: ServerVersionManager.ServerVersionEntry): Boolean = withContext(Dispatchers.IO) {
         return@withContext try {
-            val baseProxyTemplate = File(templatesDirectory, "base-proxy")
-            if (!baseProxyTemplate.exists()) {
-                baseProxyTemplate.mkdirs()
+            if (velocityEntry.downloadLinks.isEmpty()) {
+                return@withContext false
             }
 
-            val jarFile = File(baseProxyTemplate, "velocity.jar")
-            val velocityDownloadUrl = "https://github.com/GemstoneGG/Velocity-CTD/releases/download/Releases/velocity-proxy-3.4.0-SNAPSHOT-all.jar"
+            val latestDownload = velocityEntry.downloadLinks.first()
+            val velocityJarFile = File(DirectoryPaths.paths.minecraftJarsPath + "VelocityCTD.jar")
 
-            println("[TemplateManager] Download VelocityCTD...")
+            velocityJarFile.parentFile.mkdirs()
 
-            URL(velocityDownloadUrl).openStream().use { input ->
-                jarFile.outputStream().use { output ->
+            URL(latestDownload.link).openStream().use { input ->
+                velocityJarFile.outputStream().use { output ->
                     input.copyTo(output)
                 }
             }
 
-            println("[TemplateManager] VelocityCTD aggiornato")
+            println("[TemplateManager] VelocityCTD ${latestDownload.version} aggiornato")
             true
         } catch (e: Exception) {
             println("[TemplateManager] Errore updateBaseVelocityCTDJar: ${e.message}")
@@ -162,50 +183,9 @@ class TemplateManager(
         }
     }
 
-    suspend fun syncStaticServersOnRestart(service: ICloudService): Boolean = withContext(Dispatchers.IO) {
-        return@withContext try {
-            if (!service.isStatic()) {
-                return@withContext true
-            }
-
-            val serviceDir = File(DirectoryPaths.paths.staticPath, service.getName())
-            if (!serviceDir.exists()) {
-                serviceDir.mkdirs()
-            }
-
-            val pluginsDir = File(serviceDir, "plugins")
-            pluginsDir.mkdirs()
-
-            service.getTemplate().getModuleNamesToCopy().forEach { moduleName ->
-                try {
-                    val moduleFile = findModuleFile(moduleName)
-                    if (moduleFile != null && moduleFile.exists()) {
-                        val targetFile = File(pluginsDir, moduleFile.name)
-
-                        if (!targetFile.exists() || moduleFile.lastModified() > targetFile.lastModified()) {
-                            moduleFile.copyTo(targetFile, overwrite = true)
-                        }
-                    }
-                } catch (e: Exception) {
-                    println("[TemplateManager] Errore copia modulo $moduleName: ${e.message}")
-                }
-            }
-
-            if (needsServerJarUpdate(service)) {
-                println("[TemplateManager] Aggiornamento jar per ${service.getName()}")
-                updateServerJar(service, serviceDir)
-            }
-
-            true
-
-        } catch (e: Exception) {
-            println("[TemplateManager] Errore syncStaticServersOnRestart ${service.getName()}: ${e.message}")
-            false
-        }
-    }
-
     suspend fun syncStaticServersOnRestart(): Boolean = withContext(Dispatchers.IO) {
-        return@withContext try {
+        try {
+            println("[TemplateManager] Sincronizzazione server statici...")
             val serviceManager = CloudAPI.instance.getCloudServiceManager()
             val staticServices = serviceManager.getAllCachedObjects().filter { it.isStatic() }
 
@@ -215,10 +195,48 @@ class TemplateManager(
                 if (!success) allSuccess = false
             }
 
-            allSuccess
+            return@withContext allSuccess
         } catch (e: Exception) {
-            println("[TemplateManager] Errore syncStaticServersOnRestart globale: ${e.message}")
-            false
+            println("[TemplateManager] Errore durante syncStaticServersOnRestart globale: ${e.message}")
+            return@withContext false
+        }
+    }
+
+    suspend fun syncStaticServersOnRestart(service: ICloudService): Boolean = withContext(Dispatchers.IO) {
+        try {
+            if (needsServerJarUpdate(service)) {
+                println("[TemplateManager] Rilevato servizio ${service.getName()} che necessita aggiornamento jar")
+            }
+
+            val serviceDir = File(DirectoryPaths.paths.staticPath + service.getName())
+            val pluginsDir = File(serviceDir, "plugins")
+
+            if (!pluginsDir.exists()) {
+                pluginsDir.mkdirs()
+            }
+
+            val template = service.getTemplate()
+            template.getModuleNamesToCopy().forEach { moduleName ->
+                val moduleFile = findModuleFile(moduleName)
+                if (moduleFile != null && moduleFile.exists()) {
+                    val targetFile = File(pluginsDir, moduleFile.name)
+
+                    if (!targetFile.exists() || moduleFile.lastModified() > targetFile.lastModified()) {
+                        moduleFile.copyTo(targetFile, overwrite = true)
+                    }
+                }
+            }
+
+            if (needsServerJarUpdate(service)) {
+                println("[TemplateManager] Avvio aggiornamento jar per servizio ${service.getName()}")
+                updateServerJar(service, serviceDir)
+            }
+
+            return@withContext true
+
+        } catch (e: Exception) {
+            println("[TemplateManager] Errore durante syncStaticServersOnRestart per ${service.getName()}: ${e.message}")
+            return@withContext false
         }
     }
 
@@ -250,22 +268,29 @@ class TemplateManager(
 
     private suspend fun updateLeafJar(serviceDir: File) = withContext(Dispatchers.IO) {
         try {
-            println("[TemplateManager] Aggiornando Leaf jar...")
+            println("[TemplateManager] Aggiornando Leaf jar per servizio...")
 
-            val jarFile = File(serviceDir, "server.jar")
-            val leafDownloadUrl = "https://github.com/Winds-Studio/Leaf/releases/download/ver-1.21.6-dev-18/leaf-1.21.6-dev-18.jar"
+            val serverVersionManager = module.getServerVersionManager()
+            val leafVersions = serverVersionManager.getCurrentVersions().find { it.name == "Leaf" }
 
-            println("[TemplateManager] Scaricando Leaf...")
+            if (leafVersions != null && leafVersions.downloadLinks.isNotEmpty()) {
+                val latestDownload = leafVersions.downloadLinks.first()
+                val jarFile = File(serviceDir, "server.jar")
 
-            URL(leafDownloadUrl).openStream().use { input ->
-                jarFile.outputStream().use { output ->
-                    input.copyTo(output)
+                println("[TemplateManager] Scaricando Leaf ${latestDownload.version} per servizio da: ${latestDownload.link}")
+
+                URL(latestDownload.link).openStream().use { input ->
+                    jarFile.outputStream().use { output ->
+                        input.copyTo(output)
+                    }
                 }
-            }
 
-            println("[TemplateManager] Leaf aggiornato")
+                println("[TemplateManager] Leaf jar servizio aggiornato con successo a versione ${latestDownload.version}")
+            } else {
+                println("[TemplateManager] Nessuna versione Leaf disponibile per il servizio")
+            }
         } catch (e: Exception) {
-            println("[TemplateManager] Errore updateLeafJar: ${e.message}")
+            println("[TemplateManager] Errore durante l'aggiornamento Leaf jar servizio: ${e.message}")
             e.printStackTrace()
         }
     }
@@ -274,20 +299,27 @@ class TemplateManager(
         try {
             println("[TemplateManager] Aggiornando VelocityCTD jar...")
 
-            val jarFile = File(serviceDir, "velocity.jar")
-            val velocityDownloadUrl = "https://github.com/GemstoneGG/Velocity-CTD/releases/download/Releases/velocity-proxy-3.4.0-SNAPSHOT-all.jar"
+            val serverVersionManager = module.getServerVersionManager()
+            val velocityCTDVersions = serverVersionManager.getCurrentVersions().find { it.name == "VelocityCTD" }
 
-            println("[TemplateManager] Scaricando VelocityCTD...")
+            if (velocityCTDVersions != null && velocityCTDVersions.downloadLinks.isNotEmpty()) {
+                val latestDownload = velocityCTDVersions.downloadLinks.first()
+                val jarFile = File(serviceDir, "velocity.jar")
 
-            URL(velocityDownloadUrl).openStream().use { input ->
-                jarFile.outputStream().use { output ->
-                    input.copyTo(output)
+                println("[TemplateManager] Scaricando VelocityCTD ${latestDownload.version} da: ${latestDownload.link}")
+
+                URL(latestDownload.link).openStream().use { input ->
+                    jarFile.outputStream().use { output ->
+                        input.copyTo(output)
+                    }
                 }
-            }
 
-            println("[TemplateManager] VelocityCTD aggiornato")
+                println("[TemplateManager] VelocityCTD jar aggiornato con successo a versione ${latestDownload.version}")
+            } else {
+                println("[TemplateManager] Nessuna versione VelocityCTD disponibile per il download")
+            }
         } catch (e: Exception) {
-            println("[TemplateManager] Errore updateVelocityCTDJar: ${e.message}")
+            println("[TemplateManager] Errore durante l'aggiornamento VelocityCTD jar: ${e.message}")
             e.printStackTrace()
         }
     }
@@ -295,6 +327,7 @@ class TemplateManager(
     private suspend fun createBaseTemplates(): Boolean = withContext(Dispatchers.IO) {
         return@withContext try {
             val templateManager = CloudAPI.instance.getTemplateManager()
+            var created = 0
 
             val baseTemplates = listOf("auto-plugins", "base-server", "base-proxy")
 
@@ -303,12 +336,12 @@ class TemplateManager(
                     val template = DefaultTemplate(name)
                     templateManager.update(template)
                     template.getDirectory().mkdirs()
+                    created++
                 }
             }
 
             true
         } catch (e: Exception) {
-            println("[TemplateManager] Errore createBaseTemplates: ${e.message}")
             false
         }
     }
@@ -340,7 +373,7 @@ class TemplateManager(
                     }
                 }
             } catch (e: Exception) {
-                println("[TemplateManager] Errore copia plugin $moduleName: ${e.message}")
+                // Ignore
             }
         }
     }
@@ -378,11 +411,11 @@ class TemplateManager(
             return true
         }
 
-        return try {
+        try {
             val serviceVersionName = service.getServiceVersion().name.uppercase()
-            serviceVersionName.startsWith("LEAF")
+            return serviceVersionName.startsWith("LEAF")
         } catch (e: Exception) {
-            false
+            return false
         }
     }
 
@@ -396,7 +429,9 @@ class TemplateManager(
         val serviceName = service.getName().lowercase()
         val groupName = service.getServiceGroup().getName().lowercase()
 
-        if (isVelocityCTDService(serviceName, groupName)) {
+        if (serviceName.contains("velocityctd") || groupName.contains("velocityctd") ||
+            serviceName.contains("velocity-ctd") || groupName.contains("velocity-ctd") ||
+            serviceName.contains("ctd") || groupName.contains("ctd")) {
             return true
         }
 
@@ -406,92 +441,5 @@ class TemplateManager(
         } catch (e: Exception) {
             false
         }
-    }
-
-    private fun isVelocityService(serviceName: String, groupName: String): Boolean {
-        return (serviceName.contains("velocity") || groupName.contains("velocity")) &&
-                !isVelocityCTDService(serviceName, groupName)
-    }
-
-    private fun isPaperService(serviceName: String, groupName: String): Boolean {
-        return serviceName.contains("paper") || groupName.contains("paper") ||
-                serviceName.contains("purpur") || groupName.contains("purpur")
-    }
-
-    private fun isBungeeService(serviceName: String, groupName: String): Boolean {
-        return serviceName.contains("bungee") || groupName.contains("bungee") ||
-                serviceName.contains("waterfall") || groupName.contains("waterfall")
-    }
-
-    private suspend fun syncPluginsToTemplates(): Boolean = withContext(Dispatchers.IO) {
-        return@withContext try {
-            val templateManager = CloudAPI.instance.getTemplateManager()
-            val allTemplates = templateManager.getAllCachedObjects()
-
-            allTemplates.forEach { template ->
-                val updater = template.getUpdater()
-                var shouldUpdate = false
-
-                when {
-                    isServerTemplate(template.getName()) -> {
-                        val serverPlugins = getServerPluginsForTemplate(template.getName())
-                        serverPlugins.forEach { pluginName ->
-                            if (!updater.getModuleNamesToCopy().contains(pluginName)) {
-                                updater.addModuleNameToCopy(pluginName)
-                                shouldUpdate = true
-                                println("[TemplateManager] Aggiunto plugin $pluginName al template ${template.getName()}")
-                            }
-                        }
-                    }
-
-                    isProxyTemplate(template.getName()) -> {
-                        val proxyPlugins = getProxyPluginsForTemplate(template.getName())
-                        proxyPlugins.forEach { pluginName ->
-                            if (!updater.getModuleNamesToCopy().contains(pluginName)) {
-                                updater.addModuleNameToCopy(pluginName)
-                                shouldUpdate = true
-                                println("[TemplateManager] Aggiunto plugin $pluginName al template ${template.getName()}")
-                            }
-                        }
-                    }
-                }
-
-                if (shouldUpdate) {
-                    updater.update()
-                }
-            }
-
-            true
-        } catch (e: Exception) {
-            println("[TemplateManager] Errore syncPluginsToTemplates: ${e.message}")
-            false
-        }
-    }
-
-    private fun isServerTemplate(templateName: String): Boolean {
-        return templateName.contains("server", true) ||
-                templateName.contains("lobby", true) ||
-                templateName.contains("survival", true) ||
-                templateName.contains("creative", true) ||
-                templateName.contains("base-server", true)
-    }
-
-    private fun isProxyTemplate(templateName: String): Boolean {
-        return templateName.contains("proxy", true) ||
-                templateName.contains("bungee", true) ||
-                templateName.contains("velocity", true) ||
-                templateName.contains("base-proxy", true)
-    }
-
-    private fun getServerPluginsForTemplate(templateName: String): List<String> {
-        return config.plugins.filter { plugin ->
-            plugin.enabled && plugin.platforms.contains("bukkit")
-        }.map { it.name }
-    }
-
-    private fun getProxyPluginsForTemplate(templateName: String): List<String> {
-        return config.plugins.filter { plugin ->
-            plugin.enabled && (plugin.platforms.contains("velocity") || plugin.platforms.contains("bungeecord"))
-        }.map { it.name }
     }
 }
