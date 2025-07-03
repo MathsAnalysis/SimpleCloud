@@ -130,7 +130,7 @@ class PluginUpdaterModule : ICloudModule {
     private fun initializeManagers() {
         println("[AutoManager] Initializing managers...")
 
-        serverVersionManager = ServerVersionManager(config)
+        serverVersionManager = ServerVersionManager(this, config)
         pluginManager = PluginManager(this, config)
         templateManager = TemplateManager(this, config)
         updateScheduler = UpdateScheduler(this, config)

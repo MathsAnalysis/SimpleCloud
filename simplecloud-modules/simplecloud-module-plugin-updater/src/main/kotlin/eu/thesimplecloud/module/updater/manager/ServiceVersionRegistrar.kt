@@ -5,7 +5,6 @@ import eu.thesimplecloud.api.service.version.type.ServiceAPIType
 
 class ServiceVersionRegistrar {
 
-    // Store versions locally if the API doesn't support direct manipulation
     private val registeredVersions = mutableListOf<ServiceVersion>()
 
     fun registerLeafVersions(versions: List<ServerVersionManager.VersionDownload>) {
