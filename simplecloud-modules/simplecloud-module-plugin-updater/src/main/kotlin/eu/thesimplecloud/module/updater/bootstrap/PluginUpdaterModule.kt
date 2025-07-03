@@ -1,128 +1,207 @@
 package eu.thesimplecloud.module.updater.bootstrap
 
-import eu.thesimplecloud.api.CloudAPI
 import eu.thesimplecloud.api.directorypaths.DirectoryPaths
-import eu.thesimplecloud.api.event.service.CloudServiceStartingEvent
-import eu.thesimplecloud.api.eventapi.CloudEventHandler
-import eu.thesimplecloud.api.eventapi.IListener
 import eu.thesimplecloud.api.external.ICloudModule
-import eu.thesimplecloud.api.service.ICloudService
-import kotlinx.coroutines.*
+import eu.thesimplecloud.jsonlib.JsonLib
+import eu.thesimplecloud.module.updater.api.UpdaterAPI
+import eu.thesimplecloud.module.updater.config.AutoManagerConfig
+import eu.thesimplecloud.module.updater.manager.PluginManager
+import eu.thesimplecloud.module.updater.manager.ServerVersionManager
+import eu.thesimplecloud.module.updater.manager.TemplateManager
+import eu.thesimplecloud.module.updater.thread.UpdateScheduler
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import java.io.File
-import java.net.URL
 
-class PluginUpdaterModule : ICloudModule, IListener {
+class PluginUpdaterModule : ICloudModule {
 
-    companion object {
-        lateinit var instance: PluginUpdaterModule
-            private set
-    }
+    private val configFile = File(DirectoryPaths.paths.modulesPath + "automanager/auto-manager-config.json")
 
-    private val moduleScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private lateinit var config: AutoManagerConfig
+    private lateinit var serverVersionManager: ServerVersionManager
+    private lateinit var pluginManager: PluginManager
+    private lateinit var templateManager: TemplateManager
+    private lateinit var updateScheduler: UpdateScheduler
+    private lateinit var updaterAPI: UpdaterAPI
+
+    private val moduleScope = CoroutineScope(Dispatchers.IO)
 
     override fun onEnable() {
-        instance = this
+        println("[AutoManager] Inizializzazione modulo...")
+
         try {
-            CloudAPI.instance.getEventManager().registerListener(this, this)
-            println("[AutoManager] Module loaded successfully")
+            loadConfig()
+            initializeManagers()
+
+            if (config.enableAutomation) {
+                updateScheduler.start()
+                println("[AutoManager] Automazione avviata")
+            }
+
+            println("[AutoManager] Modulo caricato con successo!")
         } catch (e: Exception) {
+            println("[AutoManager] Errore durante l'inizializzazione: ${e.message}")
             e.printStackTrace()
         }
     }
 
     override fun onDisable() {
+        println("[AutoManager] Spegnimento modulo...")
+
         try {
-            moduleScope.cancel()
-            CloudAPI.instance.getEventManager().unregisterListener(this)
+            if (::updateScheduler.isInitialized) {
+                updateScheduler.shutdown()
+            }
+            println("[AutoManager] Modulo spento correttamente")
         } catch (e: Exception) {
+            println("[AutoManager] Errore durante lo spegnimento: ${e.message}")
+        }
+    }
+
+    private fun loadConfig() {
+        println("[AutoManager] Cercando config in: ${configFile.absolutePath}")
+
+        config = if (configFile.exists()) {
+            try {
+                println("[AutoManager] Config trovata, carico...")
+                val jsonData = JsonLib.fromJsonFile(configFile)!!
+                AutoManagerConfig.fromJson(jsonData)
+            } catch (e: Exception) {
+                println("[AutoManager] Errore caricamento config, uso default: ${e.message}")
+                e.printStackTrace()
+                createDefaultConfig()
+            }
+        } else {
+            println("[AutoManager] Config non trovata, creo default")
+            createDefaultConfig()
+        }
+
+        saveConfig()
+        println("[AutoManager] Config caricata con ${config.plugins.size} plugin configurati")
+    }
+
+    private fun createDefaultConfig(): AutoManagerConfig {
+        return AutoManagerConfig(
+            enableAutomation = true,
+            enableServerVersionUpdates = true,
+            enablePluginUpdates = true,
+            enableTemplateSync = true,
+            enableNotifications = false,
+            enableBackup = true,
+            updateInterval = "6h",
+            serverSoftware = listOf("paper", "leaf"),
+            plugins = listOf(
+                AutoManagerConfig.PluginConfig(
+                    name = "LuckPerms",
+                    enabled = true,
+                    platforms = listOf("bukkit", "velocity"),
+                    customUrl = null
+                ),
+                AutoManagerConfig.PluginConfig(
+                    name = "Spark",
+                    enabled = true,
+                    platforms = listOf("bukkit", "velocity"),
+                    customUrl = null
+                )
+            ),
+            templates = AutoManagerConfig.TemplateConfig(
+                autoCreateBaseTemplates = true,
+                syncOnStart = true
+            )
+        )
+    }
+
+    private fun saveConfig() {
+        try {
+            if (!configFile.parentFile.exists()) {
+                configFile.parentFile.mkdirs()
+                println("[AutoManager] Creata directory: ${configFile.parentFile.absolutePath}")
+            }
+
+            val jsonData = config.toJson()
+            JsonLib.fromObject(jsonData).saveAsFile(configFile)
+            println("[AutoManager] Config salvata in: ${configFile.absolutePath}")
+        } catch (e: Exception) {
+            println("[AutoManager] Errore salvataggio config: ${e.message}")
             e.printStackTrace()
         }
     }
 
-    @CloudEventHandler
-    fun onServiceStarting(event: CloudServiceStartingEvent) {
-        moduleScope.launch {
-            val service = event.cloudService
-            if (isLeafService(service) || isVelocityCTDService(service)) {
-                updateServiceJar(service)
-            }
-        }
+    private fun initializeManagers() {
+        serverVersionManager = ServerVersionManager(this, config)
+        pluginManager = PluginManager(this, config)
+        templateManager = TemplateManager(this, config)
+        updateScheduler = UpdateScheduler(this, config)
+        updaterAPI = UpdaterAPI(this)
     }
 
-    private suspend fun updateServiceJar(service: ICloudService) = withContext(Dispatchers.IO) {
+    fun reloadConfig() {
         try {
-            val serviceDir = if (service.isStatic()) {
-                File(DirectoryPaths.paths.staticPath + service.getName())
-            } else {
-                File(DirectoryPaths.paths.tempPath + service.getName())
-            }
-
-            when {
-                isLeafService(service) -> {
-                    val jarFile = File(serviceDir, "server.jar")
-                    val downloadUrl = "https://github.com/Winds-Studio/Leaf/releases/download/ver-1.21.6/leaf-1.21.6-20.jar"
-
-                    println("[AutoManager] Updating ${service.getName()} to latest Leaf version")
-
-                    serviceDir.mkdirs()
-                    URL(downloadUrl).openStream().use { input ->
-                        jarFile.outputStream().use { output ->
-                            input.copyTo(output)
-                        }
-                    }
-                    println("[AutoManager] ${service.getName()} updated successfully")
-                }
-                isVelocityCTDService(service) -> {
-                    val velocityJar = File(serviceDir, "velocity.jar")
-                    val downloadUrl = "https://github.com/GemstoneGG/Velocity-CTD/releases/download/Releases/velocity-proxy-3.4.0-SNAPSHOT-all.jar"
-
-                    println("[AutoManager] Updating ${service.getName()} to latest VelocityCTD version")
-
-                    serviceDir.mkdirs()
-                    URL(downloadUrl).openStream().use { input ->
-                        velocityJar.outputStream().use { output ->
-                            input.copyTo(output)
-                        }
-                    }
-                    println("[AutoManager] ${service.getName()} updated successfully")
-                }
-            }
+            loadConfig()
+            updateScheduler.updateConfig(config)
+            println("[AutoManager] Config ricaricata")
         } catch (e: Exception) {
-            println("[AutoManager] Error updating ${service.getName()}: ${e.message}")
+            println("[AutoManager] Errore ricarica config: ${e.message}")
         }
     }
 
-    private fun isLeafService(service: ICloudService): Boolean {
-        val serviceName = service.getName().lowercase()
-        val groupName = service.getServiceGroup().getName().lowercase()
-
-        if (serviceName.contains("leaf") || groupName.contains("leaf")) {
-            return true
-        }
-
+    suspend fun runManualUpdate(): Boolean {
         return try {
-            val serviceVersionName = service.getServiceVersion().name.uppercase()
-            serviceVersionName.startsWith("LEAF")
+            var success = true
+
+            if (config.enableServerVersionUpdates) {
+                success = serverVersionManager.updateAllVersions() && success
+            }
+
+            if (config.enablePluginUpdates) {
+                success = pluginManager.updateAllPlugins() && success
+            }
+
+            if (config.enableTemplateSync) {
+                success = templateManager.syncAllTemplates() && success
+                success = templateManager.syncStaticServersOnRestart() && success
+            }
+
+            success
         } catch (e: Exception) {
+            println("[AutoManager] Errore update manuale: ${e.message}")
             false
         }
     }
 
-    private fun isVelocityCTDService(service: ICloudService): Boolean {
-        val serviceName = service.getName().lowercase()
-        val groupName = service.getServiceGroup().getName().lowercase()
+    fun getConfig(): AutoManagerConfig = config
 
-        if (serviceName.contains("velocityctd") || groupName.contains("velocityctd") ||
-            serviceName.contains("velocity-ctd") || groupName.contains("velocity-ctd") ||
-            serviceName.contains("ctd") || groupName.contains("ctd")) {
-            return true
-        }
+    fun getServerVersionManager(): ServerVersionManager = serverVersionManager
 
-        return try {
-            val serviceVersionName = service.getServiceVersion().name.uppercase()
-            serviceVersionName.startsWith("VELOCITYCTD")
-        } catch (e: Exception) {
-            false
-        }
+    fun getPluginManager(): PluginManager = pluginManager
+
+    fun getTemplateManager(): TemplateManager = templateManager
+
+    fun getUpdateScheduler(): UpdateScheduler = updateScheduler
+
+    fun getUpdaterAPI(): UpdaterAPI = updaterAPI
+
+    fun isEnabled(): Boolean = config.enableAutomation
+
+    fun getStats(): Map<String, Any> {
+        return mapOf(
+            "enabled" to config.enableAutomation,
+            "scheduler_running" to updateScheduler.isRunning(),
+            "next_update" to updateScheduler.getNextUpdateTime(),
+            "configured_plugins" to config.plugins.size,
+            "enabled_plugins" to config.plugins.count { it.enabled },
+            "server_software" to config.serverSoftware.size,
+            "update_interval" to config.updateInterval
+        )
+    }
+
+    companion object {
+        @JvmStatic
+        lateinit var instance: PluginUpdaterModule
+            private set
+    }
+
+    init {
+        instance = this
     }
 }

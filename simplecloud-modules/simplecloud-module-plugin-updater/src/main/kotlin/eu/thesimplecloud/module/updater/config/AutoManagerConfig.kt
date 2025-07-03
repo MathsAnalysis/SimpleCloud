@@ -1,132 +1,103 @@
 package eu.thesimplecloud.module.updater.config
 
 import eu.thesimplecloud.jsonlib.JsonLib
-import java.io.File
 
 data class AutoManagerConfig(
     val enableAutomation: Boolean = true,
-    val updateInterval: String = "6h",
     val enableServerVersionUpdates: Boolean = true,
     val enablePluginUpdates: Boolean = true,
     val enableTemplateSync: Boolean = true,
-    val enableNotifications: Boolean = true,
+    val enableNotifications: Boolean = false,
     val enableBackup: Boolean = true,
-    val serverSoftware: List<String> = defaultServerSoftware(),
-    val plugins: List<PluginConfig> = defaultPlugins(),
-    val repositories: List<RepositoryConfig> = defaultRepositories(),
-    val templates: TemplateConfig = TemplateConfig(),
-    val notifications: NotificationConfig = NotificationConfig(),
-    val security: SecurityConfig = SecurityConfig()
+    val updateInterval: String = "6h",
+    val serverSoftware: List<String> = listOf("paper", "leaf"),
+    val plugins: List<PluginConfig> = emptyList(),
+    val templates: TemplateConfig = TemplateConfig()
 ) {
 
     data class PluginConfig(
         val name: String,
         val enabled: Boolean = true,
-        val platforms: List<String> = listOf("bukkit", "velocity", "bungeecord"),
-        val customUrl: String? = null,
-        val updateInterval: String? = null
-    )
-
-    data class RepositoryConfig(
-        val name: String,
-        val url: String,
-        val type: String,
-        val authentication: String? = null,
-        val enabled: Boolean = true
+        val platforms: List<String> = listOf("bukkit"),
+        val customUrl: String? = null
     )
 
     data class TemplateConfig(
         val autoCreateBaseTemplates: Boolean = true,
-        val autoUpdateConfigurations: Boolean = true,
-        val backupBeforeUpdate: Boolean = true,
-        val customTemplates: List<String> = emptyList()
+        val syncOnStart: Boolean = true
     )
 
-    data class NotificationConfig(
-        val discord: DiscordConfig = DiscordConfig(),
-        val console: Boolean = true,
-        val players: Boolean = true,
-        val adminPermission: String = "simplecloud.admin"
-    )
-
-    data class DiscordConfig(
-        val enabled: Boolean = false,
-        val webhook: String = "",
-        val updateNotifications: Boolean = true,
-        val errorNotifications: Boolean = true
-    )
-
-    data class SecurityConfig(
-        val verifyDownloads: Boolean = true,
-        val allowBetaVersions: Boolean = false,
-        val maxDownloadSize: Long = 100 * 1024 * 1024,
-        val trustedDomains: List<String> = defaultTrustedDomains()
-    )
+    fun toJson(): Map<String, Any> {
+        return mapOf(
+            "enableAutomation" to enableAutomation,
+            "enableServerVersionUpdates" to enableServerVersionUpdates,
+            "enablePluginUpdates" to enablePluginUpdates,
+            "enableTemplateSync" to enableTemplateSync,
+            "enableNotifications" to enableNotifications,
+            "enableBackup" to enableBackup,
+            "updateInterval" to updateInterval,
+            "serverSoftware" to serverSoftware,
+            "plugins" to plugins.map { plugin ->
+                mapOf(
+                    "name" to plugin.name,
+                    "enabled" to plugin.enabled,
+                    "platforms" to plugin.platforms,
+                    "customUrl" to plugin.customUrl
+                )
+            },
+            "templates" to mapOf(
+                "autoCreateBaseTemplates" to templates.autoCreateBaseTemplates,
+                "syncOnStart" to templates.syncOnStart
+            )
+        )
+    }
 
     companion object {
-        fun load(file: File): AutoManagerConfig {
-            return try {
-                if (file.exists()) {
-                    JsonLib.fromJsonFile(file)?.getObject(AutoManagerConfig::class.java)
-                        ?: createDefault(file)
-                } else {
-                    createDefault(file)
-                }
-            } catch (e: Exception) {
-                createDefault(file)
+        fun fromJson(jsonLib: JsonLib): AutoManagerConfig {
+            val enableAutomation = jsonLib.getBoolean("enableAutomation") ?: true
+            val enableServerVersionUpdates = jsonLib.getBoolean("enableServerVersionUpdates") ?: true
+            val enablePluginUpdates = jsonLib.getBoolean("enablePluginUpdates") ?: true
+            val enableTemplateSync = jsonLib.getBoolean("enableTemplateSync") ?: true
+            val enableNotifications = jsonLib.getBoolean("enableNotifications") ?: false
+            val enableBackup = jsonLib.getBoolean("enableBackup") ?: true
+            val updateInterval = jsonLib.getString("updateInterval") ?: "6h"
+
+            val serverSoftwareArray = jsonLib.getAsJsonArray("serverSoftware")
+            val serverSoftware = serverSoftwareArray?.map { it.asString } ?: listOf("paper", "leaf")
+
+            val pluginsArray = jsonLib.getAsJsonArray("plugins")
+            val plugins = pluginsArray?.map { pluginElement ->
+                val pluginObj = pluginElement.asJsonObject
+                val name = pluginObj.get("name").asString
+                val enabled = pluginObj.get("enabled")?.asBoolean ?: true
+                val platformsArray = pluginObj.getAsJsonArray("platforms")
+                val platforms = platformsArray?.map { it.asString } ?: listOf("bukkit")
+                val customUrl = pluginObj.get("customUrl")?.asString
+
+                PluginConfig(name, enabled, platforms, customUrl)
+            } ?: emptyList()
+
+            val templatesObj = jsonLib.getProperty("templates")
+            val templates = if (templatesObj != null) {
+                val autoCreateBaseTemplates = templatesObj.getBoolean("autoCreateBaseTemplates") ?: true
+                val syncOnStart = templatesObj.getBoolean("syncOnStart") ?: true
+                TemplateConfig(autoCreateBaseTemplates, syncOnStart)
+            } else {
+                TemplateConfig()
             }
+
+            return AutoManagerConfig(
+                enableAutomation = enableAutomation,
+                enableServerVersionUpdates = enableServerVersionUpdates,
+                enablePluginUpdates = enablePluginUpdates,
+                enableTemplateSync = enableTemplateSync,
+                enableNotifications = enableNotifications,
+                enableBackup = enableBackup,
+                updateInterval = updateInterval,
+                serverSoftware = serverSoftware,
+                plugins = plugins,
+                templates = templates
+            )
         }
-
-        private fun createDefault(file: File): AutoManagerConfig {
-            val config = AutoManagerConfig()
-            save(file, config)
-            return config
-        }
-
-        fun save(file: File, config: AutoManagerConfig) {
-            try {
-                file.parentFile.mkdirs()
-                JsonLib.empty()
-                    .append("config", config)
-                    .saveAsFile(file)
-            } catch (e: Exception) {
-                e.printStackTrace()
-            }
-        }
-
-        fun defaultServerSoftware() = listOf(
-            "paper", "purpur", "leaf", "folia",
-            "velocity", "bungeecord", "waterfall",
-            "fabric", "vanilla"
-        )
-
-        fun defaultPlugins() = listOf(
-            PluginConfig("luckperms", true, listOf("bukkit", "velocity", "bungeecord")),
-            PluginConfig("spark", true, listOf("bukkit", "velocity", "bungeecord")),
-            PluginConfig("floodgate", true, listOf("bukkit", "velocity")),
-            PluginConfig("geyser", true, listOf("bukkit", "velocity")),
-            PluginConfig("protocollib", true, listOf("bukkit")),
-            PluginConfig("placeholderapi", true, listOf("bukkit"))
-        )
-
-        fun defaultRepositories() = listOf(
-            RepositoryConfig("paper", "https://api.papermc.io/v2", "api"),
-            RepositoryConfig("purpur", "https://api.purpurmc.org/v2", "api"),
-            RepositoryConfig("leaf", "https://api.github.com/repos/Winds-Studio/Leaf", "github"),
-            RepositoryConfig("luckperms", "https://metadata.luckperms.net", "api"),
-            RepositoryConfig("spark", "https://api.github.com/repos/lucko/spark", "github"),
-            RepositoryConfig("velocityctd", "https://github.com/GemstoneGG/Velocity-CTD", "direct")
-        )
-
-        fun defaultTrustedDomains() = listOf(
-            "api.papermc.io",
-            "api.purpurmc.org",
-            "github.com",
-            "download.luckperms.net",
-            "download.lucko.me",
-            "ci.md-5.net",
-            "piston-data.mojang.com",
-            "s3.mcjars.app"
-        )
     }
 }
