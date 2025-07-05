@@ -3,7 +3,7 @@ package eu.thesimplecloud.module.updater.config
 import eu.thesimplecloud.jsonlib.JsonLib
 
 data class AutoManagerConfig(
-    val externalSources: List<String> = emptyList(),  // NEW FIELD
+    val externalSources: List<String> = emptyList(),
     var enableAutomation: Boolean = true,
     val enableServerVersionUpdates: Boolean = true,
     val enablePluginUpdates: Boolean = true,
@@ -11,7 +11,7 @@ data class AutoManagerConfig(
     val enableNotifications: Boolean = false,
     val enableBackup: Boolean = true,
     val updateInterval: String = "24h",
-    val updateTime: String = "04:00",  // New field for scheduled time (24h format)
+    val updateTime: String = "04:00",
     val serverSoftware: List<String> = listOf("paper", "leaf"),
     val plugins: List<PluginConfig> = emptyList(),
     val templates: TemplateConfig = TemplateConfig()

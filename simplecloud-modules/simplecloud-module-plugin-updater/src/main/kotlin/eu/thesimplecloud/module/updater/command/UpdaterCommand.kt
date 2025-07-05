@@ -54,7 +54,6 @@ class UpdaterCommand(private val module: PluginUpdaterModule) : ICommandHandler 
     @CommandSubPath("reload", "Reloads the configuration")
     fun handleReload() {
         try {
-            // Re-initialize the module
             module.onDisable()
             module.onEnable()
             

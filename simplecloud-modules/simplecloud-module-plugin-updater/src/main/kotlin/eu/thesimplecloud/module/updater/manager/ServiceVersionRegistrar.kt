@@ -51,6 +51,5 @@ class ServiceVersionRegistrar {
         }
     }
 
-    // Getter for registered versions if needed elsewhere
     fun getRegisteredVersions(): List<ServiceVersion> = registeredVersions.toList()
 }

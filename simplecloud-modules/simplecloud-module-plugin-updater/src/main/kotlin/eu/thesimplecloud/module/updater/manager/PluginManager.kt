@@ -375,7 +375,7 @@ class PluginManager(
                         }
                     }
 
-                    if (targetFile.length() > 100 * 1024 * 1024) { // 100MB limit
+                    if (targetFile.length() > 100 * 1024 * 1024) {
                         targetFile.delete()
                         throw Exception("File troppo grande: ${targetFile.length()} bytes")
                     }

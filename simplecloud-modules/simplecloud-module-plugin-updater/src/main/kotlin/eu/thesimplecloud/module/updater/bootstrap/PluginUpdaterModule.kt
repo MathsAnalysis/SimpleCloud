@@ -39,12 +39,10 @@ class PluginUpdaterModule : ICloudModule {
             loadConfig()
             initializeManagers()
 
-            // Register service versions BEFORE services start
             runBlocking {
                 registerServiceVersions()
             }
 
-            // Register commands
             registerCommands()
 
             if (config.enableAutomation) {
@@ -103,8 +101,8 @@ class PluginUpdaterModule : ICloudModule {
             enableTemplateSync = true,
             enableNotifications = false,
             enableBackup = true,
-            updateInterval = "24h",  // Changed from 6h to 24h
-            updateTime = "04:00",    // New field: update at 4 AM
+            updateInterval = "24h",
+            updateTime = "04:00",
             serverSoftware = listOf("paper", "leaf"),
             plugins = listOf(
                 AutoManagerConfig.PluginConfig(
@@ -142,22 +140,18 @@ class PluginUpdaterModule : ICloudModule {
         println("[AutoManager] Registering service versions...")
 
         try {
-            // Update server versions from APIs
             val updated = serverVersionManager.updateAllVersions()
             if (!updated) {
                 println("[AutoManager] Failed to update server versions from APIs")
             }
 
-            // Get current versions
             val versions = serverVersionManager.getCurrentVersions()
 
-            // Register Leaf versions
             val leafVersions = versions.find { it.name == "Leaf" }
             if (leafVersions != null && leafVersions.downloadLinks.isNotEmpty()) {
                 serviceVersionRegistrar.registerLeafVersions(leafVersions.downloadLinks)
             }
 
-            // Register VelocityCTD version
             val velocityCTD = versions.find { it.name == "VelocityCTD" }
             if (velocityCTD != null && velocityCTD.downloadLinks.isNotEmpty()) {
                 velocityCTD.downloadLinks.forEach {
@@ -184,10 +178,8 @@ class PluginUpdaterModule : ICloudModule {
 
     private fun scheduleUpdates() {
         if (config.updateTime.isNotEmpty()) {
-            // Schedule daily update at specified time
             scheduleNextUpdate()
         } else {
-            // Use interval-based updates
             updateScheduler.start()
         }
     }
@@ -198,7 +190,6 @@ class PluginUpdaterModule : ICloudModule {
             val now = LocalDateTime.now()
             var nextUpdate = now.with(updateTime)
 
-            // If the time has already passed today, schedule for tomorrow
             if (nextUpdate.isBefore(now)) {
                 nextUpdate = nextUpdate.plusDays(1)
             }
@@ -210,12 +201,10 @@ class PluginUpdaterModule : ICloudModule {
             moduleScope.launch {
                 delay(delayMillis)
                 performScheduledUpdate()
-                // Schedule next update
                 scheduleNextUpdate()
             }
         } catch (e: Exception) {
             println("[AutoManager] Error scheduling update: ${e.message}")
-            // Fall back to interval-based updates
             updateScheduler.start()
         }
     }
@@ -224,7 +213,6 @@ class PluginUpdaterModule : ICloudModule {
         println("[AutoManager] === SCHEDULED UPDATE STARTED ===")
 
         try {
-            // Check if files need updating (don't download if they exist and are recent)
             val needsUpdate = checkIfUpdateNeeded()
 
             if (!needsUpdate) {
@@ -237,7 +225,7 @@ class PluginUpdaterModule : ICloudModule {
             if (config.enableServerVersionUpdates) {
                 success = serverVersionManager.updateAllVersions() && success
                 if (success) {
-                    registerServiceVersions()  // Re-register in case new versions are available
+                    registerServiceVersions()
                 }
             }
 
@@ -258,7 +246,6 @@ class PluginUpdaterModule : ICloudModule {
     }
 
     private fun checkIfUpdateNeeded(): Boolean {
-        // Check if it's been more than 24 hours since last update
         val lastUpdateFile = File(DirectoryPaths.paths.storagePath + "last_update.txt")
 
         return if (lastUpdateFile.exists()) {
@@ -282,7 +269,6 @@ class PluginUpdaterModule : ICloudModule {
     suspend fun forceUpdate(): Boolean {
         println("[AutoManager] Force update requested")
 
-        // Update timestamp
         val lastUpdateFile = File(DirectoryPaths.paths.storagePath + "last_update.txt")
         lastUpdateFile.parentFile.mkdirs()
         lastUpdateFile.writeText(System.currentTimeMillis().toString())
