@@ -305,7 +305,7 @@ class TemplatePluginManager(private val config: AutoManagerConfig) {
         return when {
             filename.contains("LuckPerms", ignoreCase = true) -> "LuckPerms"
             filename.contains("spark", ignoreCase = true) -> "spark"
-            filename.contains("ProtocolLib", ignoreCase = true) -> "ProtocolLib"
+//            filename.contains("ProtocolLib", ignoreCase = true) -> "ProtocolLib"
             filename.contains("PlaceholderAPI", ignoreCase = true) -> "PlaceholderAPI"
             filename.contains("Floodgate", ignoreCase = true) -> "Floodgate"
             filename.contains("Geyser", ignoreCase = true) -> "Geyser"

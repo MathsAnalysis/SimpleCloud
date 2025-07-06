@@ -112,7 +112,7 @@ class PluginManager(private val config: AutoManagerConfig) {
             "spark" -> updateSpark(pluginConfig)
             "floodgate" -> updateFloodgate(pluginConfig)
             "geyser" -> updateGeyser(pluginConfig)
-            "protocollib" -> updateProtocolLib(pluginConfig)
+//            "protocollib" -> updateProtocolLib(pluginConfig)
             "placeholderapi" -> updatePlaceholderAPI(pluginConfig)
             else -> {
                 if (pluginConfig.customUrl != null) {
@@ -407,7 +407,7 @@ class PluginManager(private val config: AutoManagerConfig) {
                 val targetFileName = when {
                     pluginName.equals("Spark", ignoreCase = true) -> "spark.jar"
                     pluginName.equals("LuckPerms", ignoreCase = true) -> "LuckPerms.jar"
-                    pluginName.equals("ProtocolLib", ignoreCase = true) -> "ProtocolLib.jar"
+//                    pluginName.equals("ProtocolLib", ignoreCase = true) -> "ProtocolLib.jar"
                     pluginName.equals("PlaceholderAPI", ignoreCase = true) -> "PlaceholderAPI.jar"
                     pluginName.equals("Floodgate", ignoreCase = true) -> "Floodgate.jar"
                     pluginName.equals("Geyser", ignoreCase = true) -> "Geyser.jar"

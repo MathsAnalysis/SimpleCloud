@@ -173,16 +173,31 @@ class ServerVersionManager(
         }
 
         override fun getKnownVersions(): List<VersionDownload> = listOf(
-            VersionDownload("1.21.6", "https://s3.mcjars.app/leaf/1.21.6/19/server.jar?minecraft_version=1.21.6&build=19"),
-            VersionDownload("1.21.5", "https://s3.mcjars.app/leaf/1.21.5/62/server.jar?minecraft_version=1.21.5&build=62"),
-            VersionDownload("1.21.4", "https://s3.mcjars.app/leaf/1.21.4/502/server.jar?minecraft_version=1.21.4&build=502")
+            VersionDownload(
+                "1.21.6",
+                "https://s3.mcjars.app/leaf/1.21.6/19/server.jar?minecraft_version=1.21.6&build=19"
+            ),
+            VersionDownload(
+                "1.21.5",
+                "https://s3.mcjars.app/leaf/1.21.5/62/server.jar?minecraft_version=1.21.5&build=62"
+            ),
+            VersionDownload(
+                "1.21.4",
+                "https://s3.mcjars.app/leaf/1.21.4/502/server.jar?minecraft_version=1.21.4&build=502"
+            )
         )
 
         override fun createFallbackEntry(): ServerVersionEntry = ServerVersionEntry(
             "Leaf", "SERVER", false, "1.21.7",
             listOf(
-                VersionDownload("1.21.7", "https://github.com/Winds-Studio/Leaf/releases/download/ver-1.21.7/leaf-1.21.7-10.jar"),
-                VersionDownload("1.21.6", "https://s3.mcjars.app/leaf/1.21.6/19/server.jar?minecraft_version=1.21.6&build=19")
+                VersionDownload(
+                    "1.21.7",
+                    "https://github.com/Winds-Studio/Leaf/releases/download/ver-1.21.7/leaf-1.21.7-10.jar"
+                ),
+                VersionDownload(
+                    "1.21.6",
+                    "https://s3.mcjars.app/leaf/1.21.6/19/server.jar?minecraft_version=1.21.6&build=19"
+                )
             )
         )
     }
