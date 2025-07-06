@@ -16,7 +16,7 @@ class PluginManager(private val config: AutoManagerConfig) {
 
     private val pluginsDirectory = File(DirectoryPaths.paths.storagePath + "plugins")
     private val pluginVersionsFile = File(DirectoryPaths.paths.storagePath + "plugin-versions.json")
-    private val logsDirectory = File(DirectoryPaths.paths.storagePath + "modules/plugin-updater/logs")
+    private val logsDirectory = File(DirectoryPaths.paths.modulesPath + "automanager/logs")
     private val logFile = File(logsDirectory, "plugin-manager-${System.currentTimeMillis()}.log")
     private val okHttpClient = OkHttpClient.Builder()
         .connectTimeout(30, TimeUnit.SECONDS)
@@ -126,38 +126,46 @@ class PluginManager(private val config: AutoManagerConfig) {
 
     private suspend fun updateLuckPerms(pluginConfig: AutoManagerConfig.PluginConfig): PluginInfo =
         withContext(Dispatchers.IO) {
-            val response = URL("https://metadata.luckperms.net/data/downloads").readText()
-            val data = JsonLib.fromJsonString(response)!!
+            try {
+                val response = URL("https://metadata.luckperms.net/data/downloads").readText()
+                val data = JsonLib.fromJsonString(response)!!
 
-            val version = data.getString("version")!!
-            val downloads = data.getProperty("downloads")!!
+                val version = data.getString("version") ?: "unknown"
+                val downloadsObj = data.getProperty("downloads")
 
-            val platforms = mutableMapOf<String, String>()
+                val platforms = mutableMapOf<String, String>()
 
-            pluginConfig.platforms.forEach { platform ->
-                val mappedPlatform = when (platform) {
-                    "bukkit" -> "bukkit"
-                    "bungeecord" -> "bungee"
-                    "velocity" -> "velocity"
-                    else -> platform
-                }
+                if (downloadsObj != null) {
+                    pluginConfig.platforms.forEach { platform ->
+                        val mappedPlatform = when (platform) {
+                            "bukkit" -> "bukkit"
+                            "bungeecord" -> "bungee"
+                            "velocity" -> "velocity"
+                            else -> platform
+                        }
 
-                try {
-                    val url = downloads.getString(mappedPlatform)
-                    if (url != null) {
-                        platforms[platform] = url
+                        try {
+                            val url = downloadsObj.getString(mappedPlatform)
+                            if (url != null && url.isNotEmpty()) {
+                                platforms[platform] = url
+                                log("Found download URL for $platform: $url")
+                            }
+                        } catch (e: Exception) {
+                            log("Platform $mappedPlatform not found for LuckPerms: ${e.message}")
+                        }
                     }
-                } catch (e: Exception) {
-                    log("Platform $mappedPlatform not found for LuckPerms")
                 }
-            }
 
-            PluginInfo(
-                name = "LuckPerms",
-                version = version,
-                platforms = platforms,
-                lastUpdated = System.currentTimeMillis().toString()
-            )
+                PluginInfo(
+                    name = "LuckPerms",
+                    version = version,
+                    platforms = platforms,
+                    lastUpdated = System.currentTimeMillis().toString()
+                )
+            } catch (e: Exception) {
+                log("ERROR: Failed to fetch LuckPerms metadata: ${e.message}")
+                throw e
+            }
         }
 
     private suspend fun updateSpark(pluginConfig: AutoManagerConfig.PluginConfig): PluginInfo =
@@ -165,23 +173,74 @@ class PluginManager(private val config: AutoManagerConfig) {
             val platforms = mutableMapOf<String, String>()
 
             pluginConfig.platforms.forEach { platform ->
-                val url = when (platform) {
-                    "bukkit" -> "https://ci.lucko.me/job/spark/lastSuccessfulBuild/artifact/spark-bukkit/build/libs/spark-bukkit.jar"
-                    "bungeecord" -> "https://ci.lucko.me/job/spark/lastSuccessfulBuild/artifact/spark-bungeecord/build/libs/spark-bungeecord.jar"
-                    "velocity" -> "https://ci.lucko.me/job/spark/lastSuccessfulBuild/artifact/spark-velocity/build/libs/spark-velocity.jar"
-                    else -> null
-                }
+                when (platform) {
+                    "bukkit" -> {
+                        val urls = listOf(
+                            "https://cdn.lucko.me/spark-1.10.73-bukkit.jar",
+                            "https://ci.lucko.me/job/spark/438/artifact/spark-bukkit/build/libs/spark-1.10.73-bukkit.jar"
+                        )
 
-                url?.let { platforms[platform] = it }
+                        for (url in urls) {
+                            if (testUrl(url)) {
+                                platforms[platform] = url
+                                log("Spark URL for bukkit found: $url")
+                                break
+                            }
+                        }
+                    }
+                    "velocity" -> {
+                        val urls = listOf(
+                            "https://cdn.lucko.me/spark-1.10.73-velocity.jar",
+                            "https://ci.lucko.me/job/spark/438/artifact/spark-velocity/build/libs/spark-1.10.73-velocity.jar"
+                        )
+
+                        for (url in urls) {
+                            if (testUrl(url)) {
+                                platforms[platform] = url
+                                log("Spark URL for velocity found: $url")
+                                break
+                            }
+                        }
+                    }
+                    "bungeecord" -> {
+                        val urls = listOf(
+                            "https://cdn.lucko.me/spark-1.10.73-bungeecord.jar",
+                            "https://ci.lucko.me/job/spark/438/artifact/spark-bungeecord/build/libs/spark-1.10.73-bungeecord.jar"
+                        )
+
+                        for (url in urls) {
+                            if (testUrl(url)) {
+                                platforms[platform] = url
+                                log("Spark URL for bungeecord found: $url")
+                                break
+                            }
+                        }
+                    }
+                }
             }
 
             PluginInfo(
                 name = "Spark",
-                version = "latest",
+                version = "1.10.73",
                 platforms = platforms,
                 lastUpdated = System.currentTimeMillis().toString()
             )
         }
+
+    private fun testUrl(url: String): Boolean {
+        return try {
+            val connection = URL(url).openConnection() as java.net.HttpURLConnection
+            connection.requestMethod = "HEAD"
+            connection.connectTimeout = 5000
+            connection.readTimeout = 5000
+            connection.setRequestProperty("User-Agent", "SimpleCloud-PluginManager/1.0")
+            val responseCode = connection.responseCode
+            connection.disconnect()
+            responseCode == 200
+        } catch (e: Exception) {
+            false
+        }
+    }
 
     private suspend fun updateFloodgate(pluginConfig: AutoManagerConfig.PluginConfig): PluginInfo =
         withContext(Dispatchers.IO) {
@@ -340,12 +399,33 @@ class PluginManager(private val config: AutoManagerConfig) {
                 platformDir.mkdirs()
                 log("Created directory: ${platformDir.absolutePath}")
 
-                val filename = url.substringAfterLast("/")
-                val targetFile = File(platformDir, filename)
+                platformDir.listFiles()?.filter { it.extension == "jar" }?.forEach { oldFile ->
+                    log("Removing old version: ${oldFile.name}")
+                    oldFile.delete()
+                }
+
+                val targetFileName = when {
+                    pluginName.equals("Spark", ignoreCase = true) -> "spark.jar"
+                    pluginName.equals("LuckPerms", ignoreCase = true) -> "LuckPerms.jar"
+                    pluginName.equals("ProtocolLib", ignoreCase = true) -> "ProtocolLib.jar"
+                    pluginName.equals("PlaceholderAPI", ignoreCase = true) -> "PlaceholderAPI.jar"
+                    pluginName.equals("Floodgate", ignoreCase = true) -> "Floodgate.jar"
+                    pluginName.equals("Geyser", ignoreCase = true) -> "Geyser.jar"
+                    else -> {
+                        val originalFilename = url.substringAfterLast("/").substringBefore("?")
+                        if (originalFilename.endsWith(".jar")) {
+                            "$pluginName.jar"
+                        } else {
+                            originalFilename
+                        }
+                    }
+                }
+
+                val targetFile = File(platformDir, targetFileName)
+                log("Target file: ${targetFile.absolutePath}")
 
                 if (shouldDownloadFile(targetFile, url)) {
                     log("Downloading $pluginName for $platform from $url")
-                    log("Target file: ${targetFile.absolutePath}")
 
                     val request = Request.Builder()
                         .url(url)
@@ -393,6 +473,11 @@ class PluginManager(private val config: AutoManagerConfig) {
                     }
 
                     log("Successfully downloaded: $pluginName/$platform (${targetFile.length() / 1024} KB)")
+                    log("Saved as: ${targetFile.name}")
+
+                    val versionFile = File(platformDir, "version.txt")
+                    versionFile.writeText("${pluginInfo.version}\n${System.currentTimeMillis()}")
+
                 } else {
                     log("File already exists and is recent: ${targetFile.name}")
                 }

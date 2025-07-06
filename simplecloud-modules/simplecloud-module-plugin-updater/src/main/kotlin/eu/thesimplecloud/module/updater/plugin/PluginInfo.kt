@@ -25,7 +25,6 @@ package eu.thesimplecloud.module.updater.plugin
 import com.fasterxml.jackson.annotation.JsonProperty
 
 data class PluginInfo(
-
     @JsonProperty("name")
     val name: String,
     

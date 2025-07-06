@@ -11,6 +11,7 @@ import eu.thesimplecloud.module.updater.manager.PluginManager
 import eu.thesimplecloud.module.updater.manager.ServerVersionManager
 import eu.thesimplecloud.module.updater.manager.ServiceVersionRegistrar
 import eu.thesimplecloud.module.updater.manager.TemplateManager
+import eu.thesimplecloud.module.updater.plugin.TemplatePluginManager
 import eu.thesimplecloud.module.updater.thread.UpdateScheduler
 import kotlinx.coroutines.*
 import java.io.File
@@ -32,6 +33,8 @@ class PluginUpdaterModule : ICloudModule {
 
     private val moduleScope = CoroutineScope(Dispatchers.IO)
 
+    private lateinit var templatePluginManager: TemplatePluginManager
+
     override fun onEnable() {
         println("[AutoManager] Initializing module...")
 
@@ -41,6 +44,26 @@ class PluginUpdaterModule : ICloudModule {
 
             runBlocking {
                 registerServiceVersions()
+
+                if (config.enablePluginUpdates) {
+                    println("[AutoManager] Performing initial plugin download...")
+                    try {
+                        val success = pluginManager.ensureAllPluginsDownloaded()
+                        if (success) {
+                            println("[AutoManager] Initial plugin download completed successfully")
+
+                            println("[AutoManager] Syncing plugins to templates...")
+                            templatePluginManager.syncPluginsToTemplates()
+                            templatePluginManager.cleanOldPluginVersions()
+                            println("[AutoManager] Plugin sync to templates completed")
+                        } else {
+                            println("[AutoManager] Initial plugin download completed with some failures")
+                        }
+                    } catch (e: Exception) {
+                        println("[AutoManager] Error during initial plugin download: ${e.message}")
+                        e.printStackTrace()
+                    }
+                }
             }
 
             registerCommands()
@@ -91,6 +114,7 @@ class PluginUpdaterModule : ICloudModule {
 
         saveConfig()
         println("[AutoManager] Config loaded with ${config.plugins.size} configured plugins")
+        println("[AutoManager] Enabled plugins: ${config.plugins.filter { it.enabled }.map { it.name }}")
     }
 
     private fun createDefaultConfig(): AutoManagerConfig {
@@ -101,7 +125,7 @@ class PluginUpdaterModule : ICloudModule {
             enableTemplateSync = true,
             enableNotifications = false,
             enableBackup = true,
-            updateInterval = "04:00",
+            updateInterval = "24h",
             updateTime = "04:00",
             serverSoftware = listOf("paper", "leaf"),
             plugins = listOf(
@@ -131,6 +155,7 @@ class PluginUpdaterModule : ICloudModule {
         serverVersionManager = ServerVersionManager(this, config)
         pluginManager = PluginManager(config)
         templateManager = TemplateManager(this, config)
+        templatePluginManager = TemplatePluginManager(config)
         updateScheduler = UpdateScheduler(this, config)
         updaterAPI = UpdaterAPI(serverVersionManager, pluginManager, templateManager)
         serviceVersionRegistrar = ServiceVersionRegistrar()
@@ -260,7 +285,7 @@ class PluginUpdaterModule : ICloudModule {
     private fun saveConfig() {
         try {
             configFile.parentFile.mkdirs()
-            JsonLib.fromObject(AutoManagerConfig.toJson(config)).saveAsFile(configFile)
+            JsonLib.fromObject(config).saveAsFile(configFile)
         } catch (e: Exception) {
             println("[AutoManager] Error saving config: ${e.message}")
         }
