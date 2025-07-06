@@ -101,7 +101,7 @@ class PluginUpdaterModule : ICloudModule {
             enableTemplateSync = true,
             enableNotifications = false,
             enableBackup = true,
-            updateInterval = "24h",
+            updateInterval = "04:00",
             updateTime = "04:00",
             serverSoftware = listOf("paper", "leaf"),
             plugins = listOf(
@@ -129,7 +129,7 @@ class PluginUpdaterModule : ICloudModule {
         println("[AutoManager] Initializing managers...")
 
         serverVersionManager = ServerVersionManager(this, config)
-        pluginManager = PluginManager(this, config)
+        pluginManager = PluginManager(config)
         templateManager = TemplateManager(this, config)
         updateScheduler = UpdateScheduler(this, config)
         updaterAPI = UpdaterAPI(serverVersionManager, pluginManager, templateManager)
@@ -230,7 +230,7 @@ class PluginUpdaterModule : ICloudModule {
             }
 
             if (config.enablePluginUpdates) {
-                success = pluginManager.updateAllPlugins() && success
+                success = pluginManager.ensureAllPluginsDownloaded() && success
             }
 
             if (config.enableTemplateSync) {
@@ -260,7 +260,7 @@ class PluginUpdaterModule : ICloudModule {
     private fun saveConfig() {
         try {
             configFile.parentFile.mkdirs()
-            JsonLib.fromObject(config.toJson()).saveAsFile(configFile)
+            JsonLib.fromObject(AutoManagerConfig.toJson(config)).saveAsFile(configFile)
         } catch (e: Exception) {
             println("[AutoManager] Error saving config: ${e.message}")
         }

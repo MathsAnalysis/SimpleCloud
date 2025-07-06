@@ -30,7 +30,15 @@ dependencies {
         implementation project(':simplecloud-api')
         implementation project(':simplecloud-base')
         implementation project(':simplecloud-launcher')
-        implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-core:1.6.4'
+
+        implementation 'com.fasterxml.jackson.core:jackson-core:2.19.1'
+        implementation 'com.fasterxml.jackson.core:jackson-annotations:3.0-rc5'
+
+        implementation "org.jetbrains.kotlinx:kotlinx-coroutines-core:$dependencyKotlinCouroutinesVersion"
+
+        implementation('com.squareup.okhttp3:okhttp:4.10.0') {
+            exclude group: 'org.jetbrains.kotlin'
+        }
     }
 
 }

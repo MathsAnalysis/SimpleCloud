@@ -42,7 +42,7 @@ class UpdaterAPI(
 
         apiScope.launch {
             try {
-                val result = pluginManager.updateAllPlugins()
+                val result = pluginManager.ensureAllPluginsDownloaded()
                 future.complete(result)
             } catch (e: Exception) {
                 future.completeExceptionally(e)

@@ -52,12 +52,11 @@ class UpdateScheduler(
             }
 
             if (config.enablePluginUpdates) {
-                module.getPluginManager().updateAllPlugins()
+                module.getPluginManager().ensureAllPluginsDownloaded()
             }
 
             if (config.enableTemplateSync) {
                 module.getTemplateManager().syncAllTemplates()
-                // Static servers are updated on restart only for Leaf/VelocityCTD
                 module.getTemplateManager().syncStaticServersOnRestart()
             }
         } catch (e: Exception) {
