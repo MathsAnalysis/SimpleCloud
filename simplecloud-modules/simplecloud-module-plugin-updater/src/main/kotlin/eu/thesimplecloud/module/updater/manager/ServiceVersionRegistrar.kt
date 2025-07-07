@@ -2,6 +2,7 @@ package eu.thesimplecloud.module.updater.manager
 
 import eu.thesimplecloud.api.service.version.ServiceVersion
 import eu.thesimplecloud.api.service.version.type.ServiceAPIType
+import eu.thesimplecloud.module.updater.config.AutoManagerConfig
 
 class ServiceVersionRegistrar {
 
@@ -21,7 +22,10 @@ class ServiceVersionRegistrar {
             )
 
             registeredVersions.add(serviceVersion)
-            println("[ServiceVersionRegistrar] Registered Leaf version: $versionName")
+
+            if (AutoManagerConfig.getDefault().enableDebug) {
+                println("[ServiceVersionRegistrar] Registered Leaf version: $versionName")
+            }
         }
     }
 
@@ -36,18 +40,17 @@ class ServiceVersionRegistrar {
         )
 
         registeredVersions.add(serviceVersion)
-        println("[ServiceVersionRegistrar] Registered VelocityCTD version: $versionName")
     }
 
     fun unregisterOldVersions(keepVersions: List<String>) {
         val toRemove = registeredVersions.filter { version ->
-            (version.name.startsWith("LEAF_") || version.name.startsWith("VELOCITYCTD_")) &&
-                    !keepVersions.contains(version.name)
+            (version.name.startsWith("LEAF_") || version.name.startsWith("VELOCITYCTD_")) && !keepVersions.contains(version.name)
         }
 
         registeredVersions.removeAll(toRemove)
-        toRemove.forEach { version ->
-            println("[ServiceVersionRegistrar] Removed old version: ${version.name}")
+
+        if (AutoManagerConfig.getDefault().enableDebug) {
+            toRemove.forEach { version -> println("[ServiceVersionRegistrar] Unregistered version: ${version.name}") }
         }
     }
 

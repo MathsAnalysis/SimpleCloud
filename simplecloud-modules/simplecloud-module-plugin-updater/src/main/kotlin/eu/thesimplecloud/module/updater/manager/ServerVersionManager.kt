@@ -20,6 +20,8 @@ class ServerVersionManager(
     private val module: PluginUpdaterModule,
     private val config: AutoManagerConfig
 ) {
+
+
     data class ServerVersionEntry(
         val name: String,
         val type: String,

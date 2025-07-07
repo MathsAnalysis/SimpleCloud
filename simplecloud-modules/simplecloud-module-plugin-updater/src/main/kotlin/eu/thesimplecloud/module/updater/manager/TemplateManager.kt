@@ -7,6 +7,7 @@ import eu.thesimplecloud.api.template.ITemplate
 import eu.thesimplecloud.api.template.impl.DefaultTemplate
 import eu.thesimplecloud.module.updater.bootstrap.PluginUpdaterModule
 import eu.thesimplecloud.module.updater.config.AutoManagerConfig
+import eu.thesimplecloud.module.updater.utils.LoggingUtils
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -16,6 +17,7 @@ class TemplateManager(
     private val module: PluginUpdaterModule,
     private val config: AutoManagerConfig
 ) {
+
     companion object {
         private const val USER_AGENT = "SimpleCloud-AutoUpdater"
         private const val CONNECT_TIMEOUT = 10000
@@ -24,49 +26,62 @@ class TemplateManager(
         private const val MIN_JAR_SIZE = 1000000
     }
 
+
     private val templatesDirectory = File(DirectoryPaths.paths.templatesPath)
+
+
+
+    private fun debugLog(message: String) {
+        LoggingUtils.debug("[TemplateManager]", message)
+    }
+
+    private fun infoLog(message: String) {
+        LoggingUtils.info("[TemplateManager]", message)
+    }
 
     suspend fun syncAllTemplates(): Boolean = withContext(Dispatchers.IO) {
         return@withContext try {
-            logger("Starting unified template synchronization...")
-            var success = true
+            debugLog("Starting template synchronization...")
 
-            if (config.templates.autoCreateBaseTemplates) {
-                success = createBaseTemplates() && success
-            }
+            cleanOldJarsFromTemplates()
 
-            if (config.enableServerVersionUpdates) {
-                success = updateAllJars() && success
-            }
+            val createSuccess = if (config.templates.autoCreateBaseTemplates) {
+                createBaseTemplates()
+            } else true
 
-            success = syncExistingTemplates() && success
+            val syncSuccess = syncExistingTemplates()
+            val updateSuccess = updateAllJars()
 
-            logger("Template synchronization completed with success: $success")
+            val success = createSuccess && syncSuccess && updateSuccess
+            debugLog("Template synchronization completed with success: $success")
             success
         } catch (e: Exception) {
-            logger("Error in syncAllTemplates: ${e.message}")
+            debugLog("Error in syncAllTemplates: ${e.message}")
             e.printStackTrace()
             false
         }
     }
 
+
     private suspend fun updateAllJars(): Boolean = withContext(Dispatchers.IO) {
         return@withContext try {
-            logger("Starting unified jar updates...")
+            debugLog("Starting unified jar updates...")
+
+            cleanOldJarsFromMinecraftJars()
 
             val serverVersionManager = module.getServerVersionManager()
             val updateResult = serverVersionManager.updateAllVersions()
 
             if (!updateResult) {
-                logger("ERROR: Failed to update server versions")
+                debugLog("ERROR: Failed to update server versions")
                 return@withContext false
             }
 
             val currentVersions = serverVersionManager.getCurrentVersions()
-            logger("Available versions: ${currentVersions.map { "${it.name}:${it.latestVersion}" }}")
+            debugLog("Available versions: ${currentVersions.map { "${it.name}:${it.latestVersion}" }}")
 
             if (currentVersions.isEmpty()) {
-                logger("ERROR: No server versions available")
+                debugLog("ERROR: No server versions available")
                 return@withContext false
             }
 
@@ -80,10 +95,10 @@ class TemplateManager(
                 }
             }
 
-            logger("Unified jar updates completed: $success")
+            debugLog("Unified jar updates completed: $success")
             success
         } catch (e: Exception) {
-            logger("Error in updateAllJars: ${e.message}")
+            debugLog("Error in updateAllJars: ${e.message}")
             e.printStackTrace()
             false
         }
@@ -94,12 +109,12 @@ class TemplateManager(
         jarFileName: String
     ): Boolean = withContext(Dispatchers.IO) {
         return@withContext try {
-            logger("=== ${versionEntry.name.uppercase()} UPDATE STARTED ===")
-            logger("${versionEntry.name} version: ${versionEntry.latestVersion}")
-            logger("Available download links: ${versionEntry.downloadLinks.size}")
+            debugLog("=== ${versionEntry.name.uppercase()} UPDATE STARTED ===")
+            debugLog("${versionEntry.name} version: ${versionEntry.latestVersion}")
+            debugLog("Available download links: ${versionEntry.downloadLinks.size}")
 
             if (versionEntry.downloadLinks.isEmpty()) {
-                logger("ERROR: No download links available for ${versionEntry.name}")
+                debugLog("ERROR: No download links available for ${versionEntry.name}")
                 return@withContext false
             }
 
@@ -107,7 +122,7 @@ class TemplateManager(
 
             for (download in versionEntry.downloadLinks) {
                 try {
-                    logger("Trying download: ${download.version} -> ${download.link}")
+                    debugLog("Trying download: ${download.version} -> ${download.link}")
 
                     val targetFile = if (versionEntry.name == "VelocityCTD" || versionEntry.name == "Velocity") {
                         val versionName = sanitizeVersionName("${versionEntry.name.uppercase()}_${download.version}")
@@ -119,7 +134,7 @@ class TemplateManager(
                     }
 
                     if (targetFile.exists() && isRecentFile(targetFile)) {
-                        logger("${versionEntry.name} ${download.version} already up to date (recent file)")
+                        debugLog("${versionEntry.name} ${download.version} already up to date (recent file)")
                         downloadSuccess = true
                         break
                     }
@@ -127,29 +142,29 @@ class TemplateManager(
                     val success = downloadFileWithRetry(download.link, targetFile, "${versionEntry.name} ${download.version}")
 
                     if (success) {
-                        logger("✅ ${versionEntry.name} ${download.version} downloaded successfully!")
-                        logger("✅ File saved to: ${targetFile.absolutePath}")
-                        logger("✅ File size: ${targetFile.length()} bytes")
+                        debugLog("✅ ${versionEntry.name} ${download.version} downloaded successfully!")
+                        debugLog("✅ File saved to: ${targetFile.absolutePath}")
+                        debugLog("✅ File size: ${targetFile.length()} bytes")
                         downloadSuccess = true
                         break
                     }
 
                 } catch (e: Exception) {
-                    logger("Failed to download ${download.version}: ${e.message}")
+                    debugLog("Failed to download ${download.version}: ${e.message}")
                     continue
                 }
             }
 
             if (!downloadSuccess) {
-                logger("❌ ERROR: All ${versionEntry.name} download attempts failed")
+                debugLog("❌ ERROR: All ${versionEntry.name} download attempts failed")
                 return@withContext false
             }
 
-            logger("=== ${versionEntry.name.uppercase()} UPDATE COMPLETED ===")
+            debugLog("=== ${versionEntry.name.uppercase()} UPDATE COMPLETED ===")
             true
 
         } catch (e: Exception) {
-            logger("❌ ERROR updating ${versionEntry.name}: ${e.message}")
+            debugLog("❌ ERROR updating ${versionEntry.name}: ${e.message}")
             e.printStackTrace()
             false
         }
@@ -163,7 +178,7 @@ class TemplateManager(
     ): Boolean = withContext(Dispatchers.IO) {
         repeat(maxRetries) { attempt ->
             try {
-                logger("Download attempt ${attempt + 1}/$maxRetries for $description")
+                debugLog("Download attempt ${attempt + 1}/$maxRetries for $description")
 
                 targetFile.parentFile.mkdirs()
 
@@ -176,15 +191,15 @@ class TemplateManager(
                 }
 
                 if (targetFile.exists() && targetFile.length() > MIN_JAR_SIZE) {
-                    logger("Successfully downloaded $description (${targetFile.length()} bytes)")
+                    debugLog("Successfully downloaded $description (${targetFile.length()} bytes)")
                     return@withContext true
                 } else {
-                    logger("Download validation failed for $description: file size ${targetFile.length()}")
+                    debugLog("Download validation failed for $description: file size ${targetFile.length()}")
                     targetFile.delete()
                 }
 
             } catch (e: Exception) {
-                logger("Download attempt ${attempt + 1} failed for $description: ${e.message}")
+                debugLog("Download attempt ${attempt + 1} failed for $description: ${e.message}")
                 if (targetFile.exists()) targetFile.delete()
 
                 if (attempt < maxRetries - 1) {
@@ -193,7 +208,7 @@ class TemplateManager(
             }
         }
 
-        logger("All download attempts failed for $description")
+        debugLog("All download attempts failed for $description")
         return@withContext false
     }
 
@@ -215,14 +230,14 @@ class TemplateManager(
                 try {
                     syncSingleTemplate(template)
                 } catch (e: Exception) {
-                    logger("Error syncing template ${template.getName()}: ${e.message}")
+                    debugLog("Error syncing template ${template.getName()}: ${e.message}")
                     success = false
                 }
             }
 
             success
         } catch (e: Exception) {
-            logger("Error syncing existing templates: ${e.message}")
+            debugLog("Error syncing existing templates: ${e.message}")
             false
         }
     }
@@ -244,7 +259,7 @@ class TemplateManager(
             updateTemplateJars(template, templateDir)
 
         } catch (e: Exception) {
-            logger("Error syncing template ${template.getName()}: ${e.message}")
+            debugLog("Error syncing template ${template.getName()}: ${e.message}")
         }
     }
 
@@ -256,7 +271,7 @@ class TemplateManager(
 
                 if (!targetFile.exists() || moduleFile.lastModified() > targetFile.lastModified()) {
                     moduleFile.copyTo(targetFile, overwrite = true)
-                    logger("Copied module ${moduleFile.name} to template ${template.getName()}")
+                    debugLog("Copied module ${moduleFile.name} to template ${template.getName()}")
                 }
             }
         }
@@ -289,11 +304,16 @@ class TemplateManager(
         jarFileName: String
     ) = withContext(Dispatchers.IO) {
         try {
-            logger("Updating ${versionEntry.name} jar in template...")
+            debugLog("Updating ${versionEntry.name} jar in template...")
 
             if (versionEntry.downloadLinks.isNotEmpty()) {
                 val latestDownload = versionEntry.downloadLinks.first()
                 val jarFile = File(templateDir, jarFileName)
+
+                if (jarFile.exists()) {
+                    debugLog("Removing old ${versionEntry.name} jar: ${jarFile.name}")
+                    jarFile.delete()
+                }
 
                 val success = downloadFileWithRetry(
                     latestDownload.link,
@@ -302,20 +322,95 @@ class TemplateManager(
                 )
 
                 if (success) {
-                    logger("${versionEntry.name} jar template updated successfully to version ${latestDownload.version}")
+                    debugLog("${versionEntry.name} jar template updated successfully to version ${latestDownload.version}")
                 } else {
-                    logger("Failed to update ${versionEntry.name} jar in template")
+                    debugLog("Failed to update ${versionEntry.name} jar in template")
                 }
             }
         } catch (e: Exception) {
-            logger("Error updating ${versionEntry.name} jar in template: ${e.message}")
+            debugLog("Error updating ${versionEntry.name} jar in template: ${e.message}")
             e.printStackTrace()
         }
     }
 
+    suspend fun cleanOldJarsFromMinecraftJars(): Boolean = withContext(Dispatchers.IO) {
+        try {
+            debugLog("Cleaning old JAR files from minecraft jars directory...")
+            val minecraftJarsDir = File(DirectoryPaths.paths.minecraftJarsPath)
+
+            if (minecraftJarsDir.exists()) {
+                minecraftJarsDir.listFiles { file ->
+                    file.isDirectory && file.name.startsWith("LEAF_")
+                }?.forEach { leafDir ->
+                    debugLog("Removing old Leaf directory: ${leafDir.name}")
+                    leafDir.deleteRecursively()
+                }
+
+                minecraftJarsDir.listFiles { file ->
+                    file.name.startsWith("VELOCITYCTD_") && file.name.endsWith(".jar")
+                }?.forEach { jarFile ->
+                    debugLog("Removing old VelocityCTD jar: ${jarFile.name}")
+                    jarFile.delete()
+                }
+            }
+
+            return@withContext true
+        } catch (e: Exception) {
+            debugLog("Error cleaning minecraft jars directory: ${e.message}")
+            return@withContext false
+        }
+    }
+
+    private suspend fun cleanOldJarsFromTemplates(): Boolean = withContext(Dispatchers.IO) {
+        try {
+            debugLog("Cleaning old JAR files from all templates...")
+            val templateManager = CloudAPI.instance.getTemplateManager()
+            val allTemplates = templateManager.getAllCachedObjects()
+
+            allTemplates.forEach { template ->
+                val templateDir = File(templatesDirectory, template.getName())
+                if (templateDir.exists()) {
+                    templateDir.listFiles { file ->
+                        file.name.startsWith("leaf-") && file.name.endsWith(".jar")
+                    }?.forEach { jarFile ->
+                        debugLog("Removing old Leaf jar: ${jarFile.name}")
+                        jarFile.delete()
+                    }
+
+                    templateDir.listFiles { file ->
+                        file.name.startsWith("velocity") && file.name.endsWith(".jar")
+                    }?.forEach { jarFile ->
+                        debugLog("Removing old Velocity jar: ${jarFile.name}")
+                        jarFile.delete()
+                    }
+
+                    val paperclipJar = File(templateDir, "paperclip.jar")
+                    if (paperclipJar.exists()) {
+                        debugLog("Removing old paperclip.jar from ${template.getName()}")
+                        paperclipJar.delete()
+                    }
+
+                    val velocityJar = File(templateDir, "velocity.jar")
+                    if (velocityJar.exists()) {
+                        debugLog("Removing old velocity.jar from ${template.getName()}")
+                        velocityJar.delete()
+                    }
+                }
+            }
+
+            debugLog("Old JAR cleanup completed")
+            return@withContext true
+        } catch (e: Exception) {
+            debugLog("Error cleaning old JARs: ${e.message}")
+            return@withContext false
+        }
+    }
+
+
+
     suspend fun syncStaticServersOnRestart(): Boolean = withContext(Dispatchers.IO) {
         try {
-            logger("Synchronizing static servers...")
+            debugLog("Synchronizing static servers...")
             val serviceManager = CloudAPI.instance.getCloudServiceManager()
             val staticServices = serviceManager.getAllCachedObjects().filter { it.isStatic() }
 
@@ -327,7 +422,7 @@ class TemplateManager(
 
             return@withContext allSuccess
         } catch (e: Exception) {
-            logger("Error during static server sync: ${e.message}")
+            debugLog("Error during static server sync: ${e.message}")
             return@withContext false
         }
     }
@@ -354,14 +449,14 @@ class TemplateManager(
             }
 
             if (needsJarUpdate(service)) {
-                logger("Starting jar update for service ${service.getName()}")
+                debugLog("Starting jar update for service ${service.getName()}")
                 updateServiceJar(service, serviceDir)
             }
 
             return@withContext true
 
         } catch (e: Exception) {
-            logger("Error syncing static service ${service.getName()}: ${e.message}")
+            debugLog("Error syncing static service ${service.getName()}: ${e.message}")
             return@withContext false
         }
     }
@@ -386,7 +481,7 @@ class TemplateManager(
                 }
             }
         } catch (e: Exception) {
-            logger("Error updateServiceJar: ${e.message}")
+            debugLog("Error updateServiceJar: ${e.message}")
         }
     }
 
@@ -396,7 +491,7 @@ class TemplateManager(
         jarFileName: String
     ) = withContext(Dispatchers.IO) {
         try {
-            logger("Updating ${versionEntry.name} jar for service...")
+            debugLog("Updating ${versionEntry.name} jar for service...")
 
             if (versionEntry.downloadLinks.isNotEmpty()) {
                 val latestDownload = versionEntry.downloadLinks.first()
@@ -409,13 +504,13 @@ class TemplateManager(
                 )
 
                 if (success) {
-                    logger("Successfully updated ${versionEntry.name} jar for service to version ${latestDownload.version}")
+                    debugLog("Successfully updated ${versionEntry.name} jar for service to version ${latestDownload.version}")
                 } else {
-                    logger("Failed to update ${versionEntry.name} jar for service")
+                    debugLog("Failed to update ${versionEntry.name} jar for service")
                 }
             }
         } catch (e: Exception) {
-            logger("Error updating ${versionEntry.name} jar for service: ${e.message}")
+            debugLog("Error updating ${versionEntry.name} jar for service: ${e.message}")
             e.printStackTrace()
         }
     }
@@ -431,7 +526,7 @@ class TemplateManager(
                     val template = DefaultTemplate(templateName)
                     createdTemplates.add(template)
                     templateManager.update(template)
-                    logger("Created base template: $templateName")
+                    debugLog("Created base template: $templateName")
                 }
             }
 
@@ -439,10 +534,10 @@ class TemplateManager(
                 syncSingleTemplate(template)
             }
 
-            logger("Base templates creation completed. Created ${createdTemplates.size} templates.")
+            debugLog("Base templates creation completed. Created ${createdTemplates.size} templates.")
             return@withContext true
         } catch (e: Exception) {
-            logger("Error creating base templates: ${e.message}")
+            debugLog("Error creating base templates: ${e.message}")
             e.printStackTrace()
             return@withContext false
         }
@@ -513,9 +608,5 @@ class TemplateManager(
 
     private fun needsJarUpdate(service: ICloudService): Boolean {
         return isLeafService(service) || isVelocityService(service)
-    }
-
-    private fun logger(message: String) {
-        println("[TemplateManager] $message")
     }
 }

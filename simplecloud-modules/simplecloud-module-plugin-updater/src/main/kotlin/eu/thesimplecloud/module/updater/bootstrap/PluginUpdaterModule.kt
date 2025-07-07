@@ -43,6 +43,16 @@ class PluginUpdaterModule : ICloudModule {
             initializeManagers()
 
             runBlocking {
+                println("[AutoManager] Cleaning old JAR files...")
+
+                try {
+                    templateManager.cleanOldJarsFromMinecraftJars()
+                    println("[AutoManager] Old JAR cleanup completed")
+                } catch (e: Exception) {
+                    println("[AutoManager] Error during JAR cleanup: ${e.message}")
+                    e.printStackTrace()
+                }
+
                 registerServiceVersions()
 
                 if (config.enablePluginUpdates) {
@@ -114,7 +124,13 @@ class PluginUpdaterModule : ICloudModule {
 
         saveConfig()
         println("[AutoManager] Config loaded with ${config.plugins.size} configured plugins")
-        println("[AutoManager] Enabled plugins: ${config.plugins.filter { it.enabled }.map { it.name }}")
+
+        if (config.enableDebug) {
+            println("[AutoManager] Debug mode is ENABLED - verbose logging active")
+            println("[AutoManager] Enabled plugins: ${config.plugins.filter { it.enabled }.map { it.name }}")
+        } else {
+            println("[AutoManager] Debug mode is DISABLED - minimal logging active")
+        }
     }
 
     private fun createDefaultConfig(): AutoManagerConfig {
@@ -125,6 +141,7 @@ class PluginUpdaterModule : ICloudModule {
             enableTemplateSync = true,
             enableNotifications = false,
             enableBackup = true,
+            enableDebug = false, // AGGIUNGI QUESTO
             updateInterval = "24h",
             updateTime = "04:00",
             serverSoftware = listOf("paper", "leaf"),
@@ -238,6 +255,15 @@ class PluginUpdaterModule : ICloudModule {
         println("[AutoManager] === SCHEDULED UPDATE STARTED ===")
 
         try {
+            println("[AutoManager] Cleaning old JAR files before update...")
+            try {
+                templateManager.cleanOldJarsFromMinecraftJars()
+                println("[AutoManager] Old JAR cleanup completed")
+            } catch (e: Exception) {
+                println("[AutoManager] Error during JAR cleanup: ${e.message}")
+                e.printStackTrace()
+            }
+
             val needsUpdate = checkIfUpdateNeeded()
 
             if (!needsUpdate) {
@@ -293,6 +319,15 @@ class PluginUpdaterModule : ICloudModule {
 
     suspend fun forceUpdate(): Boolean {
         println("[AutoManager] Force update requested")
+
+        println("[AutoManager] Cleaning old JAR files before forced update...")
+        try {
+            templateManager.cleanOldJarsFromMinecraftJars()
+            println("[AutoManager] Old JAR cleanup completed")
+        } catch (e: Exception) {
+            println("[AutoManager] Error during JAR cleanup: ${e.message}")
+            e.printStackTrace()
+        }
 
         val lastUpdateFile = File(DirectoryPaths.paths.storagePath + "last_update.txt")
         lastUpdateFile.parentFile.mkdirs()

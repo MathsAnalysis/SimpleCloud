@@ -4,6 +4,7 @@ import eu.thesimplecloud.api.directorypaths.DirectoryPaths
 import eu.thesimplecloud.jsonlib.JsonLib
 import eu.thesimplecloud.module.updater.config.AutoManagerConfig
 import eu.thesimplecloud.module.updater.plugin.PluginInfo
+import eu.thesimplecloud.module.updater.utils.LoggingUtils
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
@@ -13,6 +14,14 @@ import java.net.URL
 import java.util.concurrent.TimeUnit
 
 class PluginManager(private val config: AutoManagerConfig) {
+
+    private fun logger(message: String) {
+        LoggingUtils.log("[PluginManager] $message")
+    }
+
+    private fun loggerAlways(message: String) {
+        LoggingUtils.logAlways("[PluginManager] $message")
+    }
 
     private val pluginsDirectory = File(DirectoryPaths.paths.storagePath + "plugins")
     private val pluginVersionsFile = File(DirectoryPaths.paths.storagePath + "plugin-versions.json")

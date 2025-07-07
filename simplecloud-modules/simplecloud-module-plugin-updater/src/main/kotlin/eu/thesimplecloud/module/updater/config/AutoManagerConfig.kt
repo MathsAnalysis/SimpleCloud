@@ -47,6 +47,10 @@ data class AutoManagerConfig(
     @JsonProperty("enableBackup")
     val enableBackup: Boolean = true,
 
+    // AGGIUNGI QUESTO CAMPO
+    @JsonProperty("enableDebug")
+    val enableDebug: Boolean = false,
+
     @JsonProperty("updateInterval")
     val updateInterval: String = "24h",
 
