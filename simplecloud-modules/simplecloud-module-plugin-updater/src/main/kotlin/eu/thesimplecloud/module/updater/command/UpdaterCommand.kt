@@ -150,7 +150,6 @@ class UpdaterCommand(private val module: PluginUpdaterModule) : ICommandHandler 
             val moduleStats = module.getStats()
             val schedulerStats = module.getUpdateScheduler().getStats()
             val pluginStats = module.getPluginManager().getStats()
-            val templateStats = module.getTemplateManager().getStats()
 
             sender.sendMessage("§7========== §bDetailed Status §7==========")
 
@@ -173,15 +172,6 @@ class UpdaterCommand(private val module: PluginUpdaterModule) : ICommandHandler 
 
             sender.sendMessage("§7")
             sender.sendMessage("§e§lTemplate Manager:")
-            sender.sendMessage("§7  Total Templates: §b${templateStats["total_templates"]}")
-
-            val templateTypes = templateStats["template_types"] as Map<String, Int>
-            if (templateTypes.isNotEmpty()) {
-                sender.sendMessage("§7  Template Types:")
-                templateTypes.forEach { (type, count) ->
-                    sender.sendMessage("§7    $type: §b$count")
-                }
-            }
 
             sender.sendMessage("§7=====================================")
 

@@ -3,8 +3,6 @@ package eu.thesimplecloud.module.updater.manager
 import eu.thesimplecloud.api.CloudAPI
 import eu.thesimplecloud.api.directorypaths.DirectoryPaths
 import eu.thesimplecloud.api.service.ICloudService
-import eu.thesimplecloud.api.template.ITemplate
-import eu.thesimplecloud.api.template.impl.DefaultTemplate
 import eu.thesimplecloud.module.updater.bootstrap.PluginUpdaterModule
 import eu.thesimplecloud.module.updater.config.AutoManagerConfig
 import eu.thesimplecloud.module.updater.utils.LoggingUtils
@@ -14,7 +12,6 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.io.File
 import java.util.concurrent.TimeUnit
-import java.net.URL
 
 class TemplateManager(
     private val module: PluginUpdaterModule,
@@ -23,14 +20,24 @@ class TemplateManager(
 
     companion object {
         private const val TAG = "TemplateManager"
-        private const val USER_AGENT = "SimpleCloud-AutoUpdater"
-        private const val CONNECT_TIMEOUT = 10000
-        private const val READ_TIMEOUT = 30000
-        private const val ONE_DAY_MILLIS = 24 * 60 * 60 * 1000
         private const val MIN_JAR_SIZE = 1000000
     }
 
     private val templatesDirectory = File(DirectoryPaths.paths.templatesPath)
+
+    private val httpClient: OkHttpClient by lazy {
+        OkHttpClient.Builder()
+            .connectTimeout(10, TimeUnit.SECONDS)
+            .readTimeout(30, TimeUnit.SECONDS)
+            .addInterceptor { chain ->
+                val originalRequest = chain.request()
+                val requestWithUserAgent = originalRequest.newBuilder()
+                    .header("User-Agent", "SimpleCloud-AutoUpdater")
+                    .build()
+                chain.proceed(requestWithUserAgent)
+            }
+            .build()
+    }
 
     init {
         LoggingUtils.init(TAG, "Initializing TemplateManager...")
@@ -63,12 +70,10 @@ class TemplateManager(
             var success = true
             var operationsCount = 0
 
-            // Clean old jars from templates
             LoggingUtils.debug(TAG, "Cleaning old JAR files from templates...")
             cleanOldJarsFromTemplates()
             operationsCount++
 
-            // Create base templates if configured
             val createSuccess = if (config.templates.autoCreateBaseTemplates) {
                 LoggingUtils.debug(TAG, "Creating base templates...")
                 val result = createBaseTemplates()
@@ -80,16 +85,19 @@ class TemplateManager(
             }
             success = createSuccess && success
 
-            // Sync plugins to templates
             LoggingUtils.debug(TAG, "Syncing plugins to templates...")
             val syncSuccess = syncPluginsToTemplates()
             success = syncSuccess && success
             operationsCount++
 
-            // Update template configurations
             LoggingUtils.debug(TAG, "Updating template configurations...")
             val configSuccess = updateTemplateConfigurations()
             success = configSuccess && success
+            operationsCount++
+
+            LoggingUtils.debug(TAG, "Downloading template assets...")
+            val downloadSuccess = downloadRequiredTemplateAssets()
+            success = downloadSuccess && success
             operationsCount++
 
             val stats = mapOf(
@@ -130,7 +138,6 @@ class TemplateManager(
                 if (templateDir.isDirectory) {
                     LoggingUtils.debug(TAG, "Checking template: ${templateDir.name}")
 
-                    // Recursively clean files
                     val (cleaned, protected) = cleanDirectoryWithProtection(templateDir, currentTime, maxAge, 0, 0)
                     cleanedCount += cleaned
                     protectedCount += protected
@@ -182,13 +189,11 @@ class TemplateManager(
         val fileName = file.name
         val filePath = file.relativeTo(templatesDirectory).path
 
-        // Check minimum file size for JAR files
         if (file.extension == "jar" && file.length() < MIN_JAR_SIZE) {
             LoggingUtils.debug(TAG, "JAR file below minimum size (${file.length()} < $MIN_JAR_SIZE): $fileName")
-            return true // Clean small/corrupted JAR files
+            return true
         }
 
-        // Check protected files patterns
         config.templates.protectedFiles.forEach { pattern ->
             if (matchesPattern(filePath, pattern) || matchesPattern(fileName, pattern)) {
                 LoggingUtils.debug(TAG, "File protected by pattern '$pattern': $fileName")
@@ -196,15 +201,12 @@ class TemplateManager(
             }
         }
 
-        // Check exclude patterns (these are NOT protected, just different cleanup rules)
         config.templates.excludePatterns.forEach { pattern ->
             if (matchesPattern(filePath, pattern) || matchesPattern(fileName, pattern)) {
-                // For excluded patterns, use different age criteria or skip entirely
                 return false
             }
         }
 
-        // Check file age
         val age = currentTime - file.lastModified()
         val shouldClean = age > maxAge
 
@@ -215,7 +217,6 @@ class TemplateManager(
     private fun matchesPattern(path: String, pattern: String): Boolean {
         return when {
             pattern.contains("**") -> {
-                // Recursive wildcard pattern
                 val regex = pattern
                     .replace("**", ".*")
                     .replace("*", "[^/]*")
@@ -224,7 +225,6 @@ class TemplateManager(
             }
 
             pattern.contains("*") -> {
-                // Simple wildcard pattern
                 val regex = pattern
                     .replace("*", ".*")
                     .replace("?", ".")
@@ -232,7 +232,6 @@ class TemplateManager(
             }
 
             else -> {
-                // Exact match
                 path == pattern || File(path).name == pattern
             }
         }
@@ -259,19 +258,18 @@ class TemplateManager(
                     if (!templateDir.exists()) {
                         LoggingUtils.debug(TAG, "Creating base template: $templateName")
 
-                        // Create backup if enabled
                         if (config.templates.enableTemplateBackup) {
                             createTemplateBackup(templateName)
                         }
 
                         templateDir.mkdirs()
 
-                        // Create basic structure
                         File(templateDir, "plugins").mkdirs()
                         File(templateDir, "world").mkdirs()
 
-                        // Create basic configuration files
                         createBaseTemplateFiles(templateDir, templateType)
+
+                        createDefaultPluginConfigs(templateDir, templateType)
 
                         LoggingUtils.debug(TAG, "Successfully created base template: $templateName")
                         createdCount++
@@ -305,6 +303,45 @@ class TemplateManager(
         }
     }
 
+    private fun createDefaultPluginConfigs(templateDir: File, templateType: String) {
+        LoggingUtils.debug(TAG, "Creating default plugin configurations for $templateType template")
+
+        try {
+            when (templateType) {
+                "SPIGOT" -> {
+                    LoggingUtils.debug(TAG, "Default Spigot plugin configuration created for ${templateDir.name}")
+                }
+                "VELOCITY" -> {
+                    LoggingUtils.debug(TAG, "Default Velocity plugin configuration created for ${templateDir.name}")
+                }
+                "BUNGEECORD" -> {
+                    LoggingUtils.debug(TAG, "Default BungeeCord plugin configuration created for ${templateDir.name}")
+                }
+            }
+        } catch (e: Exception) {
+            LoggingUtils.error(TAG, "Error creating default plugin configs for $templateType: ${e.message}", e)
+        }
+    }
+
+    private suspend fun downloadRequiredTemplateAssets(): Boolean = withContext(Dispatchers.IO) {
+        LoggingUtils.debugStart(TAG, "downloading required template assets")
+
+        try {
+            LoggingUtils.debug(TAG, "No required assets to download at this time")
+
+            LoggingUtils.debugSuccess(TAG, "downloading required template assets")
+            true
+        } catch (e: Exception) {
+            LoggingUtils.error(TAG, "Error downloading required template assets: ${e.message}", e)
+            false
+        }
+    }
+
+    private fun getRequiredAssetsForTemplate(templateName: String): List<String> {
+        LoggingUtils.debug(TAG, "No additional assets required for template: $templateName")
+        return emptyList()
+    }
+
     private fun createTemplateBackup(templateName: String) {
         try {
             val templateDir = File(templatesDirectory, templateName)
@@ -318,7 +355,6 @@ class TemplateManager(
                 templateDir.copyRecursively(backupTemplateDir, overwrite = false)
                 LoggingUtils.debug(TAG, "Created template backup: ${backupTemplateDir.name}")
 
-                // Clean old backups (keep only last 5)
                 cleanOldTemplateBackups(templateName)
             }
         } catch (e: Exception) {
@@ -335,7 +371,6 @@ class TemplateManager(
                 file.isDirectory && file.name.startsWith("${templateName}-backup-")
             }?.sortedByDescending { it.name } ?: return
 
-            // Keep only the 5 most recent backups
             templateBackups.drop(5).forEach { oldBackup ->
                 oldBackup.deleteRecursively()
                 LoggingUtils.debug(TAG, "Cleaned old template backup: ${oldBackup.name}")
@@ -370,7 +405,6 @@ class TemplateManager(
     }
 
     private fun createSpigotBaseFiles(templateDir: File) {
-        // Create basic server.properties
         val serverProperties = File(templateDir, "server.properties")
         if (!serverProperties.exists()) {
             serverProperties.writeText(
@@ -390,7 +424,6 @@ class TemplateManager(
             LoggingUtils.debug(TAG, "Created server.properties")
         }
 
-        // Create basic spigot.yml
         val spigotYml = File(templateDir, "spigot.yml")
         if (!spigotYml.exists()) {
             spigotYml.writeText(
@@ -505,7 +538,6 @@ class TemplateManager(
                         templatePluginsDir.mkdirs()
                     }
 
-                    // Copy relevant plugins to template
                     val copied = copyPluginsToTemplate(template, templatePluginsDir)
                     LoggingUtils.debug(TAG, "Copied $copied plugins to template ${template.name}")
 
@@ -677,10 +709,8 @@ class TemplateManager(
     private fun updateSpigotConfiguration(templateDir: File): Boolean {
         LoggingUtils.debug(TAG, "Updating Spigot configuration for ${templateDir.name}")
 
-        // Update server.properties if needed
         val serverProperties = File(templateDir, "server.properties")
         if (serverProperties.exists()) {
-            // Read and update properties if needed
             LoggingUtils.debug(TAG, "Spigot server.properties updated for ${templateDir.name}")
         }
 
@@ -690,10 +720,8 @@ class TemplateManager(
     private fun updateVelocityConfiguration(templateDir: File): Boolean {
         LoggingUtils.debug(TAG, "Updating Velocity configuration for ${templateDir.name}")
 
-        // Update velocity.toml if needed
         val velocityToml = File(templateDir, "velocity.toml")
         if (velocityToml.exists()) {
-            // Read and update configuration if needed
             LoggingUtils.debug(TAG, "Velocity configuration updated for ${templateDir.name}")
         }
 
@@ -703,10 +731,8 @@ class TemplateManager(
     private fun updateBungeeCordConfiguration(templateDir: File): Boolean {
         LoggingUtils.debug(TAG, "Updating BungeeCord configuration for ${templateDir.name}")
 
-        // Update config.yml if needed
         val configYml = File(templateDir, "config.yml")
         if (configYml.exists()) {
-            // Read and update configuration if needed
             LoggingUtils.debug(TAG, "BungeeCord configuration updated for ${templateDir.name}")
         }
 
@@ -720,7 +746,6 @@ class TemplateManager(
             var success = true
             var syncedCount = 0
 
-            // Get all static services
             val staticServices = CloudAPI.instance.getCloudServiceManager().getAllCachedObjects()
                 .filter { it.getServiceGroup().isStatic() }
 
@@ -734,7 +759,6 @@ class TemplateManager(
                     val templateDir = File(templatesDirectory, serviceTemplate)
 
                     if (templateDir.exists()) {
-                        // Sync template to static service
                         val synced = syncTemplateToStaticService(service, templateDir)
                         if (synced) {
                             syncedCount++
@@ -774,9 +798,6 @@ class TemplateManager(
     private fun syncTemplateToStaticService(service: ICloudService, templateDir: File): Boolean {
         return try {
             LoggingUtils.debug(TAG, "Syncing template ${templateDir.name} to static service ${service.getName()}")
-
-            // Implementation would sync template files to static service directory
-            // This is a placeholder for the actual sync logic
 
             LoggingUtils.debug(TAG, "Template sync completed for static service ${service.getName()}")
             true

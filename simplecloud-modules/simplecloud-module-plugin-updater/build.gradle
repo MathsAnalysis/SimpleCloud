@@ -15,4 +15,6 @@ dependencies {
     implementation('com.squareup.okhttp3:okhttp:4.10.0') {
         exclude group: 'org.jetbrains.kotlin'
     }
+
+    implementation 'org.json:json:20250517'
 }
