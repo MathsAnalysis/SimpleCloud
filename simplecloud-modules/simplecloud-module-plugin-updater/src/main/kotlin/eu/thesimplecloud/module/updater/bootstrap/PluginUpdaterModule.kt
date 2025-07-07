@@ -13,6 +13,7 @@ import eu.thesimplecloud.module.updater.manager.ServiceVersionRegistrar
 import eu.thesimplecloud.module.updater.manager.TemplateManager
 import eu.thesimplecloud.module.updater.plugin.TemplatePluginManager
 import eu.thesimplecloud.module.updater.thread.UpdateScheduler
+import eu.thesimplecloud.module.updater.utils.LoggingUtils
 import kotlinx.coroutines.*
 import java.io.File
 import java.time.LocalDateTime
@@ -21,119 +22,115 @@ import java.time.temporal.ChronoUnit
 
 class PluginUpdaterModule : ICloudModule {
 
+    companion object {
+        private const val TAG = "AutoManager"
+
+        @JvmStatic
+        lateinit var instance: PluginUpdaterModule
+            private set
+    }
+
     private val configFile = File(DirectoryPaths.paths.modulesPath + "automanager/auto-manager-config.json")
 
     private lateinit var config: AutoManagerConfig
     private lateinit var serverVersionManager: ServerVersionManager
     private lateinit var pluginManager: PluginManager
     private lateinit var templateManager: TemplateManager
+    private lateinit var templatePluginManager: TemplatePluginManager
     private lateinit var updateScheduler: UpdateScheduler
     private lateinit var updaterAPI: UpdaterAPI
     private lateinit var serviceVersionRegistrar: ServiceVersionRegistrar
 
     private val moduleScope = CoroutineScope(Dispatchers.IO)
 
-    private lateinit var templatePluginManager: TemplatePluginManager
+    init {
+        instance = this
+    }
 
     override fun onEnable() {
-        println("[AutoManager] Initializing module...")
+        LoggingUtils.init(TAG, "Initializing module...")
 
         try {
             loadConfig()
             initializeManagers()
 
             runBlocking {
-                println("[AutoManager] Cleaning old JAR files...")
-
-                try {
-                    templateManager.cleanOldJarsFromMinecraftJars()
-                    println("[AutoManager] Old JAR cleanup completed")
-                } catch (e: Exception) {
-                    println("[AutoManager] Error during JAR cleanup: ${e.message}")
-                    e.printStackTrace()
-                }
-
                 registerServiceVersions()
-
-                if (config.enablePluginUpdates) {
-                    println("[AutoManager] Performing initial plugin download...")
-                    try {
-                        val success = pluginManager.ensureAllPluginsDownloaded()
-                        if (success) {
-                            println("[AutoManager] Initial plugin download completed successfully")
-
-                            println("[AutoManager] Syncing plugins to templates...")
-                            templatePluginManager.syncPluginsToTemplates()
-                            templatePluginManager.cleanOldPluginVersions()
-                            println("[AutoManager] Plugin sync to templates completed")
-                        } else {
-                            println("[AutoManager] Initial plugin download completed with some failures")
-                        }
-                    } catch (e: Exception) {
-                        println("[AutoManager] Error during initial plugin download: ${e.message}")
-                        e.printStackTrace()
-                    }
-                }
             }
 
             registerCommands()
 
             if (config.enableAutomation) {
                 scheduleUpdates()
-                println("[AutoManager] Automation started")
+                LoggingUtils.info(TAG, "Automation started")
+            } else {
+                LoggingUtils.info(TAG, "Automation is disabled in configuration")
             }
 
-            println("[AutoManager] Module loaded successfully!")
+            LoggingUtils.info(TAG, "Module loaded successfully!")
+
+            if (config.enableDebug) {
+                LoggingUtils.debugStats(TAG, getStats())
+            }
+
         } catch (e: Exception) {
-            println("[AutoManager] Error during initialization: ${e.message}")
-            e.printStackTrace()
+            LoggingUtils.error(TAG, "Error during initialization: ${e.message}", e)
         }
     }
 
     override fun onDisable() {
-        println("[AutoManager] Shutting down module...")
+        LoggingUtils.info(TAG, "Shutting down module...")
 
         try {
             if (::updateScheduler.isInitialized) {
+                LoggingUtils.debug(TAG, "Shutting down update scheduler...")
                 updateScheduler.shutdown()
+                LoggingUtils.debug(TAG, "Update scheduler shut down")
             }
+
+            LoggingUtils.debug(TAG, "Cancelling module scope...")
             moduleScope.cancel()
-            println("[AutoManager] Module shut down correctly")
+
+            LoggingUtils.info(TAG, "Module shut down correctly")
         } catch (e: Exception) {
-            println("[AutoManager] Error during shutdown: ${e.message}")
+            LoggingUtils.error(TAG, "Error during shutdown: ${e.message}", e)
         }
     }
 
     private fun loadConfig() {
-        println("[AutoManager] Looking for config in: ${configFile.absolutePath}")
+        LoggingUtils.debug(TAG, "Looking for config in: ${configFile.absolutePath}")
 
         config = if (configFile.exists()) {
             try {
-                println("[AutoManager] Config found, loading...")
+                LoggingUtils.debug(TAG, "Config found, loading...")
                 val jsonData = JsonLib.fromJsonFile(configFile)!!
                 AutoManagerConfig.fromJson(jsonData)
             } catch (e: Exception) {
-                println("[AutoManager] Error loading config, using default: ${e.message}")
-                e.printStackTrace()
+                LoggingUtils.error(TAG, "Error loading config, using default: ${e.message}", e)
                 createDefaultConfig()
             }
         } else {
-            println("[AutoManager] Config not found, creating default")
+            LoggingUtils.debug(TAG, "Config not found, creating default")
             createDefaultConfig()
         }
 
         saveConfig()
-        println("[AutoManager] Config loaded with ${config.plugins.size} configured plugins")
+        LoggingUtils.info(TAG, "Config loaded with ${config.plugins.size} configured plugins")
 
         if (config.enableDebug) {
-            println("[AutoManager] Debug mode is ENABLED - verbose logging active")
-            println("[AutoManager] Enabled plugins: ${config.plugins.filter { it.enabled }.map { it.name }}")
+            LoggingUtils.info(TAG, "Debug mode is ENABLED - verbose logging active")
+            LoggingUtils.debugConfig(TAG, "enabled_plugins", config.plugins.filter { it.enabled }.map { it.name })
+            LoggingUtils.debugConfig(TAG, "server_software", config.serverSoftware)
+            LoggingUtils.debugConfig(TAG, "update_interval", config.updateInterval)
+            LoggingUtils.debugConfig(TAG, "update_time", config.updateTime)
         } else {
-            println("[AutoManager] Debug mode is DISABLED - minimal logging active")
+            LoggingUtils.info(TAG, "Debug mode is DISABLED - minimal logging active")
         }
     }
 
     private fun createDefaultConfig(): AutoManagerConfig {
+        LoggingUtils.debug(TAG, "Creating default configuration...")
+
         return AutoManagerConfig(
             enableAutomation = true,
             enableServerVersionUpdates = true,
@@ -141,7 +138,7 @@ class PluginUpdaterModule : ICloudModule {
             enableTemplateSync = true,
             enableNotifications = false,
             enableBackup = true,
-            enableDebug = false, // AGGIUNGI QUESTO
+            enableDebug = false,
             updateInterval = "24h",
             updateTime = "04:00",
             serverSoftware = listOf("paper", "leaf"),
@@ -167,61 +164,85 @@ class PluginUpdaterModule : ICloudModule {
     }
 
     private fun initializeManagers() {
-        println("[AutoManager] Initializing managers...")
+        LoggingUtils.debug(TAG, "Initializing managers...")
 
+        LoggingUtils.debug(TAG, "Initializing ServerVersionManager...")
         serverVersionManager = ServerVersionManager(this, config)
+
+        LoggingUtils.debug(TAG, "Initializing PluginManager...")
         pluginManager = PluginManager(config)
+
+        LoggingUtils.debug(TAG, "Initializing TemplateManager...")
         templateManager = TemplateManager(this, config)
+
+        LoggingUtils.debug(TAG, "Initializing TemplatePluginManager...")
         templatePluginManager = TemplatePluginManager(config)
+
+        LoggingUtils.debug(TAG, "Initializing UpdateScheduler...")
         updateScheduler = UpdateScheduler(this, config)
+
+        LoggingUtils.debug(TAG, "Initializing UpdaterAPI...")
         updaterAPI = UpdaterAPI(serverVersionManager, pluginManager, templateManager)
+
+        LoggingUtils.debug(TAG, "Initializing ServiceVersionRegistrar...")
         serviceVersionRegistrar = ServiceVersionRegistrar()
+
+        LoggingUtils.info(TAG, "All managers initialized successfully")
     }
 
     private suspend fun registerServiceVersions() {
-        println("[AutoManager] Registering service versions...")
+        LoggingUtils.debugStart(TAG, "service version registration")
 
         try {
             val updated = serverVersionManager.updateAllVersions()
             if (!updated) {
-                println("[AutoManager] Failed to update server versions from APIs")
+                LoggingUtils.warn(TAG, "Failed to update server versions from APIs")
+            } else {
+                LoggingUtils.debug(TAG, "Server versions updated successfully")
             }
 
             val versions = serverVersionManager.getCurrentVersions()
+            LoggingUtils.debug(TAG, "Retrieved ${versions.size} version entries")
 
             val leafVersions = versions.find { it.name == "Leaf" }
             if (leafVersions != null && leafVersions.downloadLinks.isNotEmpty()) {
+                LoggingUtils.debug(TAG, "Registering ${leafVersions.downloadLinks.size} Leaf versions...")
                 serviceVersionRegistrar.registerLeafVersions(leafVersions.downloadLinks)
             }
 
             val velocityCTD = versions.find { it.name == "VelocityCTD" }
             if (velocityCTD != null && velocityCTD.downloadLinks.isNotEmpty()) {
+                LoggingUtils.debug(TAG, "Registering ${velocityCTD.downloadLinks.size} VelocityCTD versions...")
                 velocityCTD.downloadLinks.forEach {
                     serviceVersionRegistrar.registerVelocityCTDVersion(it)
                 }
             }
 
-            println("[AutoManager] Service version registration complete")
+            LoggingUtils.debugSuccess(TAG, "service version registration")
         } catch (e: Exception) {
-            println("[AutoManager] Error registering service versions: ${e.message}")
-            e.printStackTrace()
+            LoggingUtils.error(TAG, "Error registering service versions: ${e.message}", e)
         }
     }
 
     private fun registerCommands() {
         try {
+            LoggingUtils.debug(TAG, "Registering commands...")
             val commandManager = Launcher.instance.commandManager
             commandManager.registerCommand(this, UpdaterCommand(this))
-            println("[AutoManager] Commands registered")
+            LoggingUtils.info(TAG, "Commands registered successfully")
         } catch (e: Exception) {
-            println("[AutoManager] Failed to register commands: ${e.message}")
+            LoggingUtils.error(TAG, "Failed to register commands: ${e.message}", e)
         }
     }
 
     private fun scheduleUpdates() {
+        LoggingUtils.debug(TAG, "Setting up update scheduling...")
+
         if (config.updateTime.isNotEmpty()) {
+            LoggingUtils.debug(TAG, "Using time-based scheduling: ${config.updateTime}")
             scheduleNextUpdate()
         } else {
+            LoggingUtils.debug(TAG, "Using interval-based scheduling: ${config.updateInterval}")
             updateScheduler.start()
         }
     }
@@ -237,8 +258,9 @@ class PluginUpdaterModule : ICloudModule {
             }
 
             val delayMillis = now.until(nextUpdate, ChronoUnit.MILLIS)
+            val delayMinutes = delayMillis / 1000 / 60
 
-            println("[AutoManager] Next update scheduled at: $nextUpdate (in ${delayMillis / 1000 / 60} minutes)")
+            LoggingUtils.info(TAG, "Next update scheduled at: $nextUpdate (in $delayMinutes minutes)")
 
             moduleScope.launch {
                 delay(delayMillis)
@@ -246,53 +268,68 @@ class PluginUpdaterModule : ICloudModule {
                 scheduleNextUpdate()
             }
         } catch (e: Exception) {
-            println("[AutoManager] Error scheduling update: ${e.message}")
+            LoggingUtils.error(TAG, "Error scheduling update: ${e.message}", e)
+            LoggingUtils.warn(TAG, "Falling back to interval-based scheduling")
             updateScheduler.start()
         }
     }
 
     private suspend fun performScheduledUpdate() {
-        println("[AutoManager] === SCHEDULED UPDATE STARTED ===")
+        LoggingUtils.info(TAG, "=== SCHEDULED UPDATE STARTED ===")
 
         try {
-            println("[AutoManager] Cleaning old JAR files before update...")
-            try {
-                templateManager.cleanOldJarsFromMinecraftJars()
-                println("[AutoManager] Old JAR cleanup completed")
-            } catch (e: Exception) {
-                println("[AutoManager] Error during JAR cleanup: ${e.message}")
-                e.printStackTrace()
-            }
-
             val needsUpdate = checkIfUpdateNeeded()
+            LoggingUtils.debug(TAG, "Update check result: needs_update=$needsUpdate")
 
             if (!needsUpdate) {
-                println("[AutoManager] All files are up to date, skipping download")
+                LoggingUtils.info(TAG, "All files are up to date, skipping download")
                 return
             }
 
             var success = true
 
             if (config.enableServerVersionUpdates) {
-                success = serverVersionManager.updateAllVersions() && success
-                if (success) {
+                LoggingUtils.debug(TAG, "Updating server versions...")
+                val serverUpdateSuccess = serverVersionManager.updateAllVersions()
+                success = serverUpdateSuccess && success
+
+                if (serverUpdateSuccess) {
+                    LoggingUtils.debug(TAG, "Re-registering service versions after update...")
                     registerServiceVersions()
+                } else {
+                    LoggingUtils.warn(TAG, "Server version update failed")
                 }
             }
 
             if (config.enablePluginUpdates) {
-                success = pluginManager.ensureAllPluginsDownloaded() && success
+                LoggingUtils.debug(TAG, "Updating plugins...")
+                val pluginUpdateSuccess = pluginManager.ensureAllPluginsDownloaded()
+                success = pluginUpdateSuccess && success
+
+                if (!pluginUpdateSuccess) {
+                    LoggingUtils.warn(TAG, "Plugin update failed")
+                }
             }
 
             if (config.enableTemplateSync) {
-                success = templateManager.syncAllTemplates() && success
-                success = templateManager.syncStaticServersOnRestart() && success
+                LoggingUtils.debug(TAG, "Syncing templates...")
+                val templateSyncSuccess = templateManager.syncAllTemplates()
+                success = templateSyncSuccess && success
+
+                LoggingUtils.debug(TAG, "Syncing static servers on restart...")
+                val staticSyncSuccess = templateManager.syncStaticServersOnRestart()
+                success = staticSyncSuccess && success
+
+                if (!templateSyncSuccess || !staticSyncSuccess) {
+                    LoggingUtils.warn(TAG, "Template sync failed")
+                }
             }
 
-            println("[AutoManager] === SCHEDULED UPDATE COMPLETED: ${if (success) "SUCCESS" else "PARTIAL FAILURE"} ===")
+            val resultMessage = if (success) "SUCCESS" else "PARTIAL FAILURE"
+            LoggingUtils.info(TAG, "=== SCHEDULED UPDATE COMPLETED: $resultMessage ===")
+
         } catch (e: Exception) {
-            println("[AutoManager] Error during scheduled update: ${e.message}")
-            e.printStackTrace()
+            LoggingUtils.error(TAG, "Error during scheduled update: ${e.message}", e)
         }
     }
 
@@ -302,32 +339,30 @@ class PluginUpdaterModule : ICloudModule {
         return if (lastUpdateFile.exists()) {
             val lastUpdate = lastUpdateFile.readText().toLongOrNull() ?: 0L
             val dayInMillis = 24 * 60 * 60 * 1000
-            System.currentTimeMillis() - lastUpdate > dayInMillis
+            val timeSinceUpdate = System.currentTimeMillis() - lastUpdate
+            val needsUpdate = timeSinceUpdate > dayInMillis
+
+            LoggingUtils.debug(TAG, "Last update: ${lastUpdate}, time since: ${timeSinceUpdate}ms, needs update: $needsUpdate")
+            needsUpdate
         } else {
+            LoggingUtils.debug(TAG, "No last update file found, update needed")
             true
         }
     }
 
     private fun saveConfig() {
         try {
+            LoggingUtils.debug(TAG, "Saving configuration...")
             configFile.parentFile.mkdirs()
-            JsonLib.fromObject(config).saveAsFile(configFile)
+            JsonLib.fromObject(AutoManagerConfig.toJson(config)).saveAsFile(configFile)
+            LoggingUtils.debug(TAG, "Configuration saved successfully")
         } catch (e: Exception) {
-            println("[AutoManager] Error saving config: ${e.message}")
+            LoggingUtils.error(TAG, "Error saving config: ${e.message}", e)
         }
     }
 
     suspend fun forceUpdate(): Boolean {
-        println("[AutoManager] Force update requested")
-
-        println("[AutoManager] Cleaning old JAR files before forced update...")
-        try {
-            templateManager.cleanOldJarsFromMinecraftJars()
-            println("[AutoManager] Old JAR cleanup completed")
-        } catch (e: Exception) {
-            println("[AutoManager] Error during JAR cleanup: ${e.message}")
-            e.printStackTrace()
-        }
+        LoggingUtils.info(TAG, "Force update requested")
 
         val lastUpdateFile = File(DirectoryPaths.paths.storagePath + "last_update.txt")
         lastUpdateFile.parentFile.mkdirs()
@@ -337,37 +372,43 @@ class PluginUpdaterModule : ICloudModule {
     }
 
     fun checkVersions(): Map<String, String> {
+        LoggingUtils.debug(TAG, "Checking current versions...")
         val versions = mutableMapOf<String, String>()
 
         serverVersionManager.getCurrentVersions().forEach { entry ->
             versions[entry.name] = entry.latestVersion
         }
 
+        LoggingUtils.debug(TAG, "Retrieved ${versions.size} version entries")
         return versions
     }
 
     fun getConfig(): AutoManagerConfig = config
-
     fun getServerVersionManager(): ServerVersionManager = serverVersionManager
-
     fun getPluginManager(): PluginManager = pluginManager
-
     fun getTemplateManager(): TemplateManager = templateManager
-
+    fun getTemplatePluginManager(): TemplatePluginManager = templatePluginManager
     fun getUpdateScheduler(): UpdateScheduler = updateScheduler
-
     fun getUpdaterAPI(): UpdaterAPI = updaterAPI
-
     fun isEnabled(): Boolean = config.enableAutomation
 
     fun getStats(): Map<String, Any> {
         return mapOf(
             "enabled" to config.enableAutomation,
+            "debug_mode" to config.enableDebug,
             "next_update" to getNextUpdateTime(),
             "configured_plugins" to config.plugins.size,
             "enabled_plugins" to config.plugins.count { it.enabled },
             "server_software" to config.serverSoftware.size,
-            "update_time" to config.updateTime
+            "update_time" to config.updateTime,
+            "update_interval" to config.updateInterval,
+            "automation_features" to mapOf(
+                "server_version_updates" to config.enableServerVersionUpdates,
+                "plugin_updates" to config.enablePluginUpdates,
+                "template_sync" to config.enableTemplateSync,
+                "notifications" to config.enableNotifications,
+                "backup" to config.enableBackup
+            )
         )
     }
 
@@ -385,15 +426,5 @@ class PluginUpdaterModule : ICloudModule {
         } else {
             "Using interval: ${config.updateInterval}"
         }
-    }
-
-    companion object {
-        @JvmStatic
-        lateinit var instance: PluginUpdaterModule
-            private set
-    }
-
-    init {
-        instance = this
     }
 }

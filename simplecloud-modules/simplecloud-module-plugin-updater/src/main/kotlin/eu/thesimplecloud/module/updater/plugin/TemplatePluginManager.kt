@@ -1,366 +1,487 @@
 package eu.thesimplecloud.module.updater.plugin
 
-import eu.thesimplecloud.api.CloudAPI
 import eu.thesimplecloud.api.directorypaths.DirectoryPaths
-import eu.thesimplecloud.api.service.ServiceType
-import eu.thesimplecloud.api.servicegroup.ICloudServiceGroup
 import eu.thesimplecloud.module.updater.config.AutoManagerConfig
+import eu.thesimplecloud.module.updater.utils.LoggingUtils
 import java.io.File
 
 class TemplatePluginManager(private val config: AutoManagerConfig) {
 
+    companion object {
+        private const val TAG = "TemplatePluginManager"
+    }
+
     private val pluginsDirectory = File(DirectoryPaths.paths.storagePath + "plugins")
     private val templatesDirectory = File(DirectoryPaths.paths.templatesPath)
-    private val logsDirectory = File(DirectoryPaths.paths.modulesPath + "automanager/logs")
-    private val logFile = File(logsDirectory, "template-plugin-manager-${System.currentTimeMillis()}.log")
 
     init {
-        if (!logsDirectory.exists()) {
-            logsDirectory.mkdirs()
-        }
+        LoggingUtils.init(TAG, "Initializing TemplatePluginManager...")
+        initializeDirectories()
+        logInitialConfiguration()
     }
 
-    private fun log(message: String) {
-        val timestamp = java.time.LocalDateTime.now()
-        val logMessage = "[$timestamp] $message"
-        println("[TemplatePluginManager] $message")
-        try {
-            logFile.appendText("$logMessage\n")
-        } catch (e: Exception) {
-            println("[TemplatePluginManager] Failed to write to log: ${e.message}")
-        }
-    }
-
-    fun syncPluginsToTemplates() {
-        log("Starting plugin sync to templates")
+    private fun initializeDirectories() {
+        LoggingUtils.debug(TAG, "Ensuring necessary directories exist...")
 
         if (!pluginsDirectory.exists()) {
-            log("Plugins directory not found: ${pluginsDirectory.absolutePath}")
-            return
+            pluginsDirectory.mkdirs()
+            LoggingUtils.debug(TAG, "Created plugins directory: ${pluginsDirectory.absolutePath}")
         }
 
-        val serviceGroups = CloudAPI.instance.getCloudServiceGroupManager().getAllCachedObjects()
-
-        serviceGroups.forEach { group ->
-            syncPluginsToGroup(group)
-        }
-
-        syncPluginsToEveryTemplates()
-
-        log("Plugin sync to templates completed")
-    }
-
-    private fun syncPluginsToGroup(group: ICloudServiceGroup) {
-        val groupTemplate = group.getTemplateName()
-        val templateDir = File(templatesDirectory, groupTemplate)
-
-        if (!templateDir.exists()) {
-            log("Template directory not found for ${group.getName()}: ${templateDir.absolutePath}")
-            return
-        }
-
-        val pluginsDir = File(templateDir, "plugins")
-        pluginsDir.mkdirs()
-
-        val platform = when {
-            group.getServiceType() == ServiceType.PROXY -> {
-                when (group.getServiceVersion().name.lowercase()) {
-                    in listOf("bungeecord", "waterfall", "hexacord", "flamecord") -> "bungeecord"
-                    in listOf("velocity", "velocityctd") -> "velocity"
-                    else -> {
-                        log("Unknown proxy type for ${group.getName()}: ${group.getServiceVersion().name}")
-                        return
-                    }
-                }
-            }
-            else -> "bukkit"
-        }
-
-        log("Syncing plugins to group ${group.getName()} (platform: $platform)")
-
-        pluginsDirectory.listFiles()?.filter { it.isDirectory }?.forEach { pluginDir ->
-            val pluginName = pluginDir.name
-
-            val isEnabled = config.plugins.any {
-                it.name.equals(pluginName, ignoreCase = true) && it.enabled
-            }
-
-            if (!isEnabled) {
-                log("Skipping disabled plugin: $pluginName")
-                return@forEach
-            }
-
-            val platformDir = File(pluginDir, platform)
-
-            if (platformDir.exists() && platformDir.isDirectory) {
-                platformDir.listFiles()?.filter { it.extension == "jar" }?.forEach { jarFile ->
-                    try {
-                        val targetFile = File(pluginsDir, jarFile.name)
-
-                        if (!targetFile.exists() || jarFile.lastModified() > targetFile.lastModified()) {
-                            log("Copying ${jarFile.name} to template ${groupTemplate}")
-                            jarFile.copyTo(targetFile, overwrite = true)
-                        } else {
-                            log("Plugin ${jarFile.name} already up to date in template ${groupTemplate}")
-                        }
-                    } catch (e: Exception) {
-                        log("ERROR copying plugin ${jarFile.name} to template: ${e.message}")
-                    }
-                }
-            } else {
-                log("Platform directory not found: ${platformDir.absolutePath}")
-                if (platform == "velocity") {
-                    log("Checking for BungeeCord compatibility for plugin $pluginName")
-                    val bungeecordDir = File(pluginDir, "bungeecord")
-                    if (bungeecordDir.exists() && bungeecordDir.isDirectory) {
-                        log("WARNING: Using BungeeCord plugin for Velocity (may not be compatible): $pluginName")
-                        bungeecordDir.listFiles()?.filter { it.extension == "jar" }?.forEach { jarFile ->
-                            try {
-                                val targetFile = File(pluginsDir, jarFile.name)
-                                log("Copying BungeeCord plugin ${jarFile.name} for Velocity use (compatibility not guaranteed)")
-                                jarFile.copyTo(targetFile, overwrite = true)
-                            } catch (e: Exception) {
-                                log("ERROR copying BungeeCord plugin ${jarFile.name}: ${e.message}")
-                            }
-                        }
-                    }
-                }
-            }
+        if (!templatesDirectory.exists()) {
+            templatesDirectory.mkdirs()
+            LoggingUtils.debug(TAG, "Created templates directory: ${templatesDirectory.absolutePath}")
         }
     }
 
-    private fun syncPluginsToEveryTemplates() {
-//        val everyDir = File(templatesDirectory, "EVERY_SERVER")
-//        if (everyDir.exists()) {
-//            syncPluginsToDirectory(everyDir, "bukkit")
-//        }
+    private fun logInitialConfiguration() {
+        LoggingUtils.debugConfig(TAG, "plugins_directory", pluginsDirectory.absolutePath)
+        LoggingUtils.debugConfig(TAG, "templates_directory", templatesDirectory.absolutePath)
+        LoggingUtils.debugConfig(TAG, "configured_plugins_count", config.plugins.size)
+        LoggingUtils.debugConfig(TAG, "enabled_plugins_count", config.plugins.count { it.enabled })
 
-        val everyServerDir = File(templatesDirectory, "EVERY_SERVER")
-        if (everyServerDir.exists()) {
-            syncPluginsToDirectory(everyServerDir, "bukkit")
-        }
-
-        val everyProxyDir = File(templatesDirectory, "EVERY_PROXY")
-        if (everyProxyDir.exists()) {
-            syncPluginsToEveryProxyDirectory(everyProxyDir)
-        }
-    }
-
-    private fun syncPluginsToEveryProxyDirectory(templateDir: File) {
-        val pluginsDir = File(templateDir, "plugins")
-        pluginsDir.mkdirs()
-
-        log("Syncing plugins to ${templateDir.name} template (multi-platform proxy)")
-
-        val proxyPlatforms = CloudAPI.instance.getCloudServiceGroupManager()
-            .getAllCachedObjects()
-            .filter { it.getServiceType() == ServiceType.PROXY }
-            .map { group ->
-                when (group.getServiceVersion().name.lowercase()) {
-                    in listOf("velocity", "velocityctd") -> "velocity"
-                    in listOf("bungeecord", "waterfall", "hexacord", "flamecord") -> "bungeecord"
-                    else -> "bungeecord"
-                }
-            }.distinct()
-
-        log("Detected proxy platforms in use: $proxyPlatforms")
-
-        pluginsDirectory.listFiles()?.filter { it.isDirectory }?.forEach { pluginDir ->
-            val pluginName = pluginDir.name
-
-            val isEnabled = config.plugins.any {
-                it.name.equals(pluginName, ignoreCase = true) && it.enabled
-            }
-
-            if (!isEnabled) {
-                log("Skipping disabled plugin: $pluginName")
-                return@forEach
-            }
-
-            var pluginCopied = false
-            for (platform in proxyPlatforms) {
-                val platformDir = File(pluginDir, platform)
-
-                if (platformDir.exists() && platformDir.isDirectory) {
-                    platformDir.listFiles()?.filter { it.extension == "jar" }?.forEach { jarFile ->
-                        try {
-                            val targetFile = File(pluginsDir, jarFile.name)
-
-                            if (!targetFile.exists() || jarFile.lastModified() > targetFile.lastModified()) {
-                                log("Copying ${jarFile.name} to ${templateDir.name} (platform: $platform)")
-                                jarFile.copyTo(targetFile, overwrite = true)
-                                pluginCopied = true
-                            }
-                        } catch (e: Exception) {
-                            log("ERROR copying plugin ${jarFile.name}: ${e.message}")
-                        }
-                    }
-                    if (pluginCopied) break
-                }
-            }
-
-            if (!pluginCopied) {
-                log("No compatible platform found for plugin $pluginName in EVERY_PROXY")
-            }
-        }
-    }
-
-    private fun syncPluginsToDirectory(templateDir: File, defaultPlatform: String) {
-        val pluginsDir = File(templateDir, "plugins")
-        pluginsDir.mkdirs()
-
-        log("Syncing plugins to ${templateDir.name} template (platform: $defaultPlatform)")
-
-        pluginsDirectory.listFiles()?.filter { it.isDirectory }?.forEach { pluginDir ->
-            val pluginName = pluginDir.name
-
-            val isEnabled = config.plugins.any {
-                it.name.equals(pluginName, ignoreCase = true) && it.enabled
-            }
-
-            if (!isEnabled) {
-                log("Skipping disabled plugin: $pluginName")
-                return@forEach
-            }
-
-            val platformsToCheck = if (templateDir.name == "EVERY_PROXY") {
-                listOf("bungeecord", "velocity")
-            } else {
-                listOf(defaultPlatform)
-            }
-
-            for (platform in platformsToCheck) {
-                val platformDir = File(pluginDir, platform)
-
-                if (platformDir.exists() && platformDir.isDirectory) {
-                    platformDir.listFiles()?.filter { it.extension == "jar" }?.forEach { jarFile ->
-                        try {
-                            val targetFile = File(pluginsDir, jarFile.name)
-
-                            if (!targetFile.exists() || jarFile.lastModified() > targetFile.lastModified()) {
-                                log("Copying ${jarFile.name} to ${templateDir.name}")
-                                jarFile.copyTo(targetFile, overwrite = true)
-                            }
-                        } catch (e: Exception) {
-                            log("ERROR copying plugin ${jarFile.name}: ${e.message}")
-                        }
-                    }
-                    break
-                }
-            }
-        }
-    }
-
-    fun cleanOldPluginVersions() {
-        log("Cleaning old plugin versions from templates")
-
-        val allTemplateDirs = mutableListOf<File>()
-
-        CloudAPI.instance.getCloudServiceGroupManager().getAllCachedObjects().forEach { group ->
-            val templateDir = File(templatesDirectory, group.getTemplateName())
-            if (templateDir.exists()) {
-                allTemplateDirs.add(templateDir)
-            }
-        }
-
-        listOf("EVERY_SERVER", "EVERY_PROXY").forEach { name ->
-            val dir = File(templatesDirectory, name)
-            if (dir.exists()) {
-                allTemplateDirs.add(dir)
-            }
-        }
-
-        allTemplateDirs.forEach { templateDir ->
-            val pluginsDir = File(templateDir, "plugins")
-            if (pluginsDir.exists()) {
-                cleanPluginsDirectory(pluginsDir)
-            }
-        }
-    }
-
-    private fun cleanPluginsDirectory(pluginsDir: File) {
-        log("Cleaning plugins directory: ${pluginsDir.absolutePath}")
-
-        val pluginFiles = mutableMapOf<String, MutableList<File>>()
-
-        pluginsDir.listFiles()?.filter { it.extension == "jar" }?.forEach { file ->
-            val pluginName = extractPluginName(file.name)
-            pluginFiles.getOrPut(pluginName) { mutableListOf() }.add(file)
-        }
-
-        pluginFiles.forEach { (pluginName, files) ->
-            if (files.size > 1) {
-                log("Found ${files.size} versions of $pluginName")
-                files.sortByDescending { it.lastModified() }
-
-                files.drop(1).forEach { oldFile ->
-                    log("Removing old version: ${oldFile.name}")
-                    oldFile.delete()
-                }
-            }
-        }
-    }
-
-    private fun extractPluginName(filename: String): String {
-        return when {
-            filename.contains("LuckPerms", ignoreCase = true) -> "LuckPerms"
-            filename.contains("spark", ignoreCase = true) -> "spark"
-//            filename.contains("ProtocolLib", ignoreCase = true) -> "ProtocolLib"
-            filename.contains("PlaceholderAPI", ignoreCase = true) -> "PlaceholderAPI"
-            filename.contains("Floodgate", ignoreCase = true) -> "Floodgate"
-            filename.contains("Geyser", ignoreCase = true) -> "Geyser"
-            filename.contains("Vault", ignoreCase = true) -> "Vault"
-            else -> filename.substringBefore("-").substringBefore(".")
+        if (config.enableDebug) {
+            val enabledPlugins = config.plugins.filter { it.enabled }.map { it.name }
+            LoggingUtils.debugConfig(TAG, "enabled_plugins", enabledPlugins)
         }
     }
 
     fun createPluginDirectoryStructure() {
-        log("Creating correct plugin directory structure...")
+        LoggingUtils.debugStart(TAG, "creating plugin directory structure")
 
-        config.plugins.forEach { pluginConfig ->
-            if (pluginConfig.enabled) {
-                val pluginDir = File(pluginsDirectory, pluginConfig.name)
+        var createdCount = 0
+        var existingCount = 0
 
-                pluginConfig.platforms.forEach { platform ->
-                    val platformDir = File(pluginDir, platform)
-                    if (!platformDir.exists()) {
-                        platformDir.mkdirs()
-                        log("Created directory: ${platformDir.absolutePath}")
+        try {
+            LoggingUtils.debug(TAG, "Creating directory structure for ${config.plugins.size} plugins...")
+
+            config.plugins.forEach { pluginConfig ->
+                if (pluginConfig.enabled) {
+                    val pluginDir = File(pluginsDirectory, pluginConfig.name)
+                    LoggingUtils.debug(TAG, "Processing plugin: ${pluginConfig.name}")
+
+                    pluginConfig.platforms.forEach { platform ->
+                        val platformDir = File(pluginDir, platform)
+                        if (!platformDir.exists()) {
+                            platformDir.mkdirs()
+                            LoggingUtils.debug(TAG, "Created directory: ${platformDir.absolutePath}")
+                            createdCount++
+                        } else {
+                            LoggingUtils.debug(TAG, "Directory already exists: ${platformDir.absolutePath}")
+                            existingCount++
+                        }
                     }
+                } else {
+                    LoggingUtils.debug(TAG, "Plugin ${pluginConfig.name} is disabled, skipping directory creation")
                 }
             }
-        }
 
-        log("Plugin directory structure creation completed")
+            val stats = mapOf(
+                "directories_created" to createdCount,
+                "directories_existing" to existingCount,
+                "total_plugins_processed" to config.plugins.size
+            )
+            LoggingUtils.debugStats(TAG, stats)
+
+            LoggingUtils.debugSuccess(TAG, "creating plugin directory structure")
+            LoggingUtils.info(TAG, "Plugin directory structure creation completed ($createdCount created, $existingCount existing)")
+
+        } catch (e: Exception) {
+            LoggingUtils.error(TAG, "Error creating plugin directory structure: ${e.message}", e)
+        }
     }
 
     fun debugPluginStructure() {
-        log("=== DEBUG: Plugin Directory Structure ===")
+        LoggingUtils.debug(TAG, "=== DEBUG: Plugin Directory Structure ===")
 
         if (!pluginsDirectory.exists()) {
-            log("Plugins directory does not exist: ${pluginsDirectory.absolutePath}")
+            LoggingUtils.debug(TAG, "Plugins directory does not exist: ${pluginsDirectory.absolutePath}")
             return
         }
 
-        pluginsDirectory.listFiles()?.forEach { file ->
-            if (file.isDirectory) {
-                log("Plugin directory: ${file.name}")
-                file.listFiles()?.forEach { platformDir ->
-                    if (platformDir.isDirectory) {
-                        val jarCount = platformDir.listFiles()?.count { it.extension == "jar" } ?: 0
-                        log("  Platform: ${platformDir.name} ($jarCount JAR files)")
-                        platformDir.listFiles()?.filter { it.extension == "jar" }?.forEach { jar ->
-                            log("    - ${jar.name}")
+        try {
+            var totalPlugins = 0
+            var totalPlatforms = 0
+            var totalJarFiles = 0
+
+            pluginsDirectory.listFiles()?.forEach { file ->
+                if (file.isDirectory) {
+                    totalPlugins++
+                    LoggingUtils.debug(TAG, "Plugin directory: ${file.name}")
+
+                    file.listFiles()?.forEach { platformDir ->
+                        if (platformDir.isDirectory) {
+                            totalPlatforms++
+                            val jarCount = platformDir.listFiles()?.count { it.extension == "jar" } ?: 0
+                            totalJarFiles += jarCount
+
+                            LoggingUtils.debug(TAG, "  Platform: ${platformDir.name} ($jarCount JAR files)")
+
+                            if (config.enableDebug && jarCount > 0) {
+                                platformDir.listFiles()?.filter { it.extension == "jar" }?.forEach { jar ->
+                                    val sizeKB = jar.length() / 1024
+                                    val lastModified = java.time.Instant.ofEpochMilli(jar.lastModified())
+                                    LoggingUtils.debug(TAG, "    - ${jar.name} (${sizeKB}KB, modified: $lastModified)")
+                                }
+                            }
+                        } else {
+                            LoggingUtils.debug(TAG, "  File (should be in platform folder): ${platformDir.name}")
                         }
-                    } else {
-                        log("  File (should be in platform folder): ${platformDir.name}")
                     }
+                } else {
+                    LoggingUtils.debug(TAG, "File in plugins root (should be in platform folder): ${file.name}")
                 }
+            }
+
+            val summary = mapOf(
+                "total_plugin_directories" to totalPlugins,
+                "total_platform_directories" to totalPlatforms,
+                "total_jar_files" to totalJarFiles
+            )
+            LoggingUtils.debugStats(TAG, summary)
+
+        } catch (e: Exception) {
+            LoggingUtils.error(TAG, "Error debugging plugin structure: ${e.message}", e)
+        }
+
+        LoggingUtils.debug(TAG, "=== END DEBUG ===")
+    }
+
+    fun syncPluginsToTemplates(): Boolean {
+        LoggingUtils.debugStart(TAG, "syncing plugins to templates")
+
+        if (!pluginsDirectory.exists()) {
+            LoggingUtils.warn(TAG, "Plugins directory does not exist, skipping sync")
+            return true
+        }
+
+        if (!templatesDirectory.exists()) {
+            LoggingUtils.warn(TAG, "Templates directory does not exist, skipping sync")
+            return true
+        }
+
+        try {
+            var success = true
+            var templatesProcessed = 0
+            var pluginsCopied = 0
+            var errors = 0
+
+            val templates = getAvailableTemplates()
+            LoggingUtils.debug(TAG, "Found ${templates.size} templates to process")
+
+            templates.forEach { template ->
+                try {
+                    LoggingUtils.debug(TAG, "Processing template: ${template.name} (type: ${template.type})")
+                    templatesProcessed++
+
+                    val templatePluginsDir = File(template.directory, "plugins")
+                    if (!templatePluginsDir.exists()) {
+                        templatePluginsDir.mkdirs()
+                        LoggingUtils.debug(TAG, "Created plugins directory for template: ${template.name}")
+                    }
+
+                    val copiedCount = copyPluginsToTemplate(template, templatePluginsDir)
+                    pluginsCopied += copiedCount
+
+                    LoggingUtils.debug(TAG, "Copied $copiedCount plugins to template: ${template.name}")
+
+                } catch (e: Exception) {
+                    LoggingUtils.error(TAG, "Error processing template ${template.name}: ${e.message}", e)
+                    success = false
+                    errors++
+                }
+            }
+
+            val stats = mapOf(
+                "templates_processed" to templatesProcessed,
+                "plugins_copied" to pluginsCopied,
+                "errors" to errors,
+                "success" to success
+            )
+            LoggingUtils.debugStats(TAG, stats)
+
+            if (success) {
+                LoggingUtils.debugSuccess(TAG, "syncing plugins to templates")
+                LoggingUtils.info(TAG, "Successfully synced plugins to $templatesProcessed templates ($pluginsCopied plugins copied)")
             } else {
-                log("File in plugins root (should be in platform folder): ${file.name}")
+                LoggingUtils.debugFailure(TAG, "syncing plugins to templates", "$errors errors occurred")
+            }
+
+            return success
+
+        } catch (e: Exception) {
+            LoggingUtils.error(TAG, "Error syncing plugins to templates: ${e.message}", e)
+            return false
+        }
+    }
+
+    private fun getAvailableTemplates(): List<TemplateInfo> {
+        LoggingUtils.debug(TAG, "Scanning for available templates...")
+
+        val templates = mutableListOf<TemplateInfo>()
+
+        try {
+            templatesDirectory.listFiles()?.forEach { templateDir ->
+                if (templateDir.isDirectory) {
+                    val templateType = determineTemplateType(templateDir)
+                    val templateInfo = TemplateInfo(templateDir.name, templateType, templateDir)
+                    templates.add(templateInfo)
+
+                    LoggingUtils.debug(TAG, "Found template: ${templateDir.name} (type: $templateType)")
+                }
+            }
+        } catch (e: Exception) {
+            LoggingUtils.error(TAG, "Error scanning templates: ${e.message}", e)
+        }
+
+        LoggingUtils.debug(TAG, "Found ${templates.size} templates")
+        return templates
+    }
+
+    private fun determineTemplateType(templateDir: File): String {
+        LoggingUtils.debug(TAG, "Determining type for template: ${templateDir.name}")
+
+        val type = when {
+            File(templateDir, "velocity.toml").exists() -> {
+                LoggingUtils.debug(TAG, "Template ${templateDir.name} identified as VELOCITY (velocity.toml found)")
+                "VELOCITY"
+            }
+            File(templateDir, "config.yml").exists() && File(templateDir, "plugins").exists() -> {
+                LoggingUtils.debug(TAG, "Template ${templateDir.name} identified as BUNGEECORD (config.yml found)")
+                "BUNGEECORD"
+            }
+            File(templateDir, "server.properties").exists() -> {
+                LoggingUtils.debug(TAG, "Template ${templateDir.name} identified as SPIGOT (server.properties found)")
+                "SPIGOT"
+            }
+            templateDir.name.contains("velocity", ignoreCase = true) -> {
+                LoggingUtils.debug(TAG, "Template ${templateDir.name} identified as VELOCITY (name-based)")
+                "VELOCITY"
+            }
+            templateDir.name.contains("bungee", ignoreCase = true) -> {
+                LoggingUtils.debug(TAG, "Template ${templateDir.name} identified as BUNGEECORD (name-based)")
+                "BUNGEECORD"
+            }
+            else -> {
+                LoggingUtils.debug(TAG, "Template ${templateDir.name} identified as SPIGOT (default)")
+                "SPIGOT"
             }
         }
 
-        log("=== END DEBUG ===")
+        return type
     }
+
+    private fun copyPluginsToTemplate(template: TemplateInfo, templatePluginsDir: File): Int {
+        LoggingUtils.debug(TAG, "Copying plugins to template ${template.name} (type: ${template.type})")
+
+        var copiedCount = 0
+
+        val platform = when (template.type) {
+            "VELOCITY" -> "velocity"
+            "BUNGEECORD" -> "bungee"
+            else -> "bukkit"
+        }
+
+        LoggingUtils.debug(TAG, "Using platform: $platform for template ${template.name}")
+
+        config.plugins.filter { it.enabled }.forEach { pluginConfig ->
+            if (platform in pluginConfig.platforms) {
+                try {
+                    LoggingUtils.debug(TAG, "Processing plugin ${pluginConfig.name} for platform $platform")
+
+                    val pluginSourceDir = File(pluginsDirectory, "${pluginConfig.name}/$platform")
+
+                    if (pluginSourceDir.exists()) {
+                        val jarFiles = pluginSourceDir.listFiles()?.filter { it.extension == "jar" } ?: emptyList()
+                        LoggingUtils.debug(TAG, "Found ${jarFiles.size} JAR files for plugin ${pluginConfig.name}")
+
+                        jarFiles.forEach { jarFile ->
+                            try {
+                                val targetFile = File(templatePluginsDir, jarFile.name)
+
+                                if (!targetFile.exists() || jarFile.lastModified() > targetFile.lastModified()) {
+                                    jarFile.copyTo(targetFile, overwrite = true)
+                                    copiedCount++
+
+                                    val sizeKB = targetFile.length() / 1024
+                                    LoggingUtils.debug(TAG, "Copied plugin: ${jarFile.name} to ${template.name} (${sizeKB}KB)")
+                                } else {
+                                    LoggingUtils.debug(TAG, "Plugin ${jarFile.name} is up to date in ${template.name}")
+                                }
+                            } catch (e: Exception) {
+                                LoggingUtils.error(TAG, "Error copying JAR file ${jarFile.name}: ${e.message}", e)
+                            }
+                        }
+                    } else {
+                        LoggingUtils.debug(TAG, "Plugin source directory not found: ${pluginSourceDir.absolutePath}")
+                    }
+                } catch (e: Exception) {
+                    LoggingUtils.error(TAG, "Error processing plugin ${pluginConfig.name}: ${e.message}", e)
+                }
+            } else {
+                LoggingUtils.debug(TAG, "Plugin ${pluginConfig.name} does not support platform $platform")
+            }
+        }
+
+        LoggingUtils.debug(TAG, "Copied $copiedCount plugins to template ${template.name}")
+        return copiedCount
+    }
+
+    fun validatePluginFiles(): Map<String, List<String>> {
+        LoggingUtils.debugStart(TAG, "validating plugin files")
+
+        val validationResults = mutableMapOf<String, List<String>>()
+
+        try {
+            config.plugins.filter { it.enabled }.forEach { pluginConfig ->
+                val issues = mutableListOf<String>()
+
+                LoggingUtils.debug(TAG, "Validating plugin: ${pluginConfig.name}")
+
+                val pluginDir = File(pluginsDirectory, pluginConfig.name)
+                if (!pluginDir.exists()) {
+                    issues.add("Plugin directory does not exist")
+                } else {
+                    pluginConfig.platforms.forEach { platform ->
+                        val platformDir = File(pluginDir, platform)
+                        if (!platformDir.exists()) {
+                            issues.add("Platform directory '$platform' does not exist")
+                        } else {
+                            val jarFiles = platformDir.listFiles()?.filter { it.extension == "jar" } ?: emptyList()
+                            if (jarFiles.isEmpty()) {
+                                issues.add("No JAR files found for platform '$platform'")
+                            } else {
+                                jarFiles.forEach { jarFile ->
+                                    if (!isValidJarFile(jarFile)) {
+                                        issues.add("Invalid JAR file: ${jarFile.name}")
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if (issues.isNotEmpty()) {
+                    validationResults[pluginConfig.name] = issues
+                    LoggingUtils.warn(TAG, "Plugin ${pluginConfig.name} has ${issues.size} validation issues")
+                } else {
+                    LoggingUtils.debug(TAG, "Plugin ${pluginConfig.name} validation passed")
+                }
+            }
+
+            val stats = mapOf(
+                "plugins_validated" to config.plugins.count { it.enabled },
+                "plugins_with_issues" to validationResults.size,
+                "total_issues" to validationResults.values.sumOf { it.size }
+            )
+            LoggingUtils.debugStats(TAG, stats)
+
+            LoggingUtils.debugSuccess(TAG, "validating plugin files")
+
+        } catch (e: Exception) {
+            LoggingUtils.error(TAG, "Error during plugin validation: ${e.message}", e)
+        }
+
+        return validationResults
+    }
+
+    private fun isValidJarFile(file: File): Boolean {
+        return try {
+            val bytes = file.readBytes()
+            bytes.size >= 4 &&
+                    bytes[0] == 0x50.toByte() &&
+                    bytes[1] == 0x4B.toByte() &&
+                    (bytes[2] == 0x03.toByte() || bytes[2] == 0x05.toByte() || bytes[2] == 0x07.toByte()) &&
+                    (bytes[3] == 0x04.toByte() || bytes[3] == 0x06.toByte() || bytes[3] == 0x08.toByte())
+        } catch (e: Exception) {
+            LoggingUtils.debug(TAG, "Error validating JAR file ${file.name}: ${e.message}")
+            false
+        }
+    }
+
+    fun cleanupOldPluginFiles(maxAgeHours: Int = 168) {
+        LoggingUtils.debugStart(TAG, "cleaning up old plugin files")
+
+        try {
+            var cleanedCount = 0
+            val maxAgeMillis = maxAgeHours * 60 * 60 * 1000L
+            val currentTime = System.currentTimeMillis()
+
+            LoggingUtils.debug(TAG, "Cleaning files older than $maxAgeHours hours")
+
+            config.plugins.forEach { pluginConfig ->
+                val pluginDir = File(pluginsDirectory, pluginConfig.name)
+                if (pluginDir.exists()) {
+                    pluginConfig.platforms.forEach { platform ->
+                        val platformDir = File(pluginDir, platform)
+                        if (platformDir.exists()) {
+                            platformDir.listFiles()?.filter { it.extension == "jar" }?.forEach { jarFile ->
+                                val age = currentTime - jarFile.lastModified()
+                                if (age > maxAgeMillis) {
+                                    LoggingUtils.debug(TAG, "Removing old JAR file: ${jarFile.name} (age: ${age / 1000 / 60 / 60}h)")
+                                    if (jarFile.delete()) {
+                                        cleanedCount++
+                                    } else {
+                                        LoggingUtils.warn(TAG, "Failed to delete old JAR file: ${jarFile.name}")
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            LoggingUtils.debug(TAG, "Cleaned up $cleanedCount old plugin files")
+            LoggingUtils.debugSuccess(TAG, "cleaning up old plugin files")
+
+        } catch (e: Exception) {
+            LoggingUtils.error(TAG, "Error during plugin cleanup: ${e.message}", e)
+        }
+    }
+
+    fun getStats(): Map<String, Any> {
+        val pluginStats = mutableMapOf<String, Any>()
+        val platformStats = mutableMapOf<String, Int>()
+        var totalJarFiles = 0
+
+        try {
+            config.plugins.filter { it.enabled }.forEach { pluginConfig ->
+                val pluginDir = File(pluginsDirectory, pluginConfig.name)
+                var pluginJarCount = 0
+
+                if (pluginDir.exists()) {
+                    pluginConfig.platforms.forEach { platform ->
+                        val platformDir = File(pluginDir, platform)
+                        if (platformDir.exists()) {
+                            val jarCount = platformDir.listFiles()?.count { it.extension == "jar" } ?: 0
+                            pluginJarCount += jarCount
+                            platformStats[platform] = platformStats.getOrDefault(platform, 0) + jarCount
+                        }
+                    }
+                }
+
+                pluginStats[pluginConfig.name] = pluginJarCount
+                totalJarFiles += pluginJarCount
+            }
+        } catch (e: Exception) {
+            LoggingUtils.error(TAG, "Error calculating stats: ${e.message}", e)
+        }
+
+        return mapOf(
+            "plugins_directory" to pluginsDirectory.absolutePath,
+            "templates_directory" to templatesDirectory.absolutePath,
+            "enabled_plugins" to config.plugins.count { it.enabled },
+            "total_plugins" to config.plugins.size,
+            "total_jar_files" to totalJarFiles,
+            "jar_files_by_plugin" to pluginStats,
+            "jar_files_by_platform" to platformStats,
+            "available_templates" to getAvailableTemplates().size
+        )
+    }
+
+    data class TemplateInfo(
+        val name: String,
+        val type: String,
+        val directory: File
+    )
 }

@@ -2,6 +2,7 @@ package eu.thesimplecloud.module.updater.thread
 
 import eu.thesimplecloud.module.updater.bootstrap.PluginUpdaterModule
 import eu.thesimplecloud.module.updater.config.AutoManagerConfig
+import eu.thesimplecloud.module.updater.utils.LoggingUtils
 import kotlinx.coroutines.*
 import java.util.concurrent.TimeUnit
 
@@ -9,90 +10,315 @@ class UpdateScheduler(
     private val module: PluginUpdaterModule,
     private var config: AutoManagerConfig
 ) {
+    companion object {
+        private const val TAG = "UpdateScheduler"
+        private const val INITIAL_DELAY_SECONDS = 30L
+        private const val ERROR_RETRY_MINUTES = 30L
+        private const val DEFAULT_INTERVAL_HOURS = 6L
+    }
+
     private val schedulerScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var currentJob: Job? = null
+    private var isRunning = false
+    private var nextUpdateTime: Long = 0L
+
+    init {
+        LoggingUtils.init(TAG, "Initializing UpdateScheduler...")
+        logSchedulerConfiguration()
+    }
+
+    private fun logSchedulerConfiguration() {
+        LoggingUtils.debugConfig(TAG, "update_interval", config.updateInterval)
+        LoggingUtils.debugConfig(TAG, "update_time", config.updateTime)
+        LoggingUtils.debugConfig(TAG, "enable_automation", config.enableAutomation)
+        LoggingUtils.debugConfig(TAG, "enable_server_version_updates", config.enableServerVersionUpdates)
+        LoggingUtils.debugConfig(TAG, "enable_plugin_updates", config.enablePluginUpdates)
+        LoggingUtils.debugConfig(TAG, "enable_template_sync", config.enableTemplateSync)
+    }
 
     fun start() {
+        LoggingUtils.debugStart(TAG, "scheduler startup")
+
         if (currentJob?.isActive == true) {
+            LoggingUtils.debug(TAG, "Scheduler is already running, skipping start")
             return
         }
 
-        currentJob = schedulerScope.launch {
-            delay(30_000)
+        if (!config.enableAutomation) {
+            LoggingUtils.info(TAG, "Automation is disabled, scheduler will not start")
+            return
+        }
 
-            while (isActive) {
-                try {
-                    runScheduledUpdate()
-                    delay(parseInterval(config.updateInterval))
-                } catch (_: Exception) {
-                    delay(TimeUnit.MINUTES.toMillis(30))
+        val intervalMillis = parseInterval(config.updateInterval)
+        LoggingUtils.debug(TAG, "Parsed update interval: ${intervalMillis}ms (${intervalMillis / 1000 / 60} minutes)")
+
+        currentJob = schedulerScope.launch {
+            try {
+                isRunning = true
+                LoggingUtils.info(TAG, "Update scheduler started with ${INITIAL_DELAY_SECONDS}s initial delay")
+
+                delay(INITIAL_DELAY_SECONDS * 1000)
+                LoggingUtils.debug(TAG, "Initial delay completed, starting update cycle")
+
+                while (isActive && isRunning) {
+                    try {
+                        nextUpdateTime = System.currentTimeMillis() + intervalMillis
+                        LoggingUtils.debug(TAG, "Next update scheduled for: ${java.time.Instant.ofEpochMilli(nextUpdateTime)}")
+
+                        runScheduledUpdate()
+
+                        LoggingUtils.debug(TAG, "Waiting ${intervalMillis / 1000 / 60} minutes until next update")
+                        delay(intervalMillis)
+
+                    } catch (e: CancellationException) {
+                        LoggingUtils.debug(TAG, "Update cycle cancelled")
+                        break
+                    } catch (e: Exception) {
+                        LoggingUtils.error(TAG, "Error in update cycle: ${e.message}", e)
+                        LoggingUtils.warn(TAG, "Retrying in $ERROR_RETRY_MINUTES minutes...")
+                        delay(TimeUnit.MINUTES.toMillis(ERROR_RETRY_MINUTES))
+                    }
                 }
+            } finally {
+                isRunning = false
+                LoggingUtils.info(TAG, "Update scheduler stopped")
             }
         }
+
+        LoggingUtils.debugSuccess(TAG, "scheduler startup")
     }
 
     fun shutdown() {
-        currentJob?.cancel()
-        schedulerScope.cancel()
-    }
+        LoggingUtils.debugStart(TAG, "scheduler shutdown")
 
-    fun updateConfig(newConfig: AutoManagerConfig) {
-        this.config = newConfig
+        try {
+            isRunning = false
 
-        if (currentJob?.isActive == true) {
-            currentJob?.cancel()
-            start()
+            currentJob?.let { job ->
+                LoggingUtils.debug(TAG, "Cancelling current update job...")
+                job.cancel()
+
+                runBlocking {
+                    try {
+                        withTimeout(5000) {
+                            job.join()
+                        }
+                        LoggingUtils.debug(TAG, "Update job cancelled gracefully")
+                    } catch (e: TimeoutCancellationException) {
+                        LoggingUtils.warn(TAG, "Update job cancellation timed out, forcing shutdown")
+                    }
+                }
+            }
+
+            LoggingUtils.debug(TAG, "Cancelling scheduler scope...")
+            schedulerScope.cancel()
+
+            LoggingUtils.debugSuccess(TAG, "scheduler shutdown")
+        } catch (e: Exception) {
+            LoggingUtils.error(TAG, "Error during scheduler shutdown: ${e.message}", e)
         }
     }
 
+    fun updateConfig(newConfig: AutoManagerConfig) {
+        LoggingUtils.debug(TAG, "Updating scheduler configuration...")
+
+        val oldInterval = config.updateInterval
+        val oldAutomation = config.enableAutomation
+
+        this.config = newConfig
+
+        LoggingUtils.debugConfig(TAG, "old_interval", oldInterval)
+        LoggingUtils.debugConfig(TAG, "new_interval", newConfig.updateInterval)
+        LoggingUtils.debugConfig(TAG, "old_automation", oldAutomation)
+        LoggingUtils.debugConfig(TAG, "new_automation", newConfig.enableAutomation)
+
+        if (currentJob?.isActive == true && (oldInterval != newConfig.updateInterval || oldAutomation != newConfig.enableAutomation)) {
+            LoggingUtils.debug(TAG, "Configuration changed, restarting scheduler...")
+
+            currentJob?.cancel()
+
+            if (newConfig.enableAutomation) {
+                start()
+            } else {
+                LoggingUtils.info(TAG, "Automation disabled, scheduler stopped")
+            }
+        } else if (!oldAutomation && newConfig.enableAutomation) {
+            LoggingUtils.debug(TAG, "Automation enabled, starting scheduler...")
+            start()
+        }
+
+        LoggingUtils.debug(TAG, "Scheduler configuration updated")
+    }
+
     private suspend fun runScheduledUpdate() {
+        LoggingUtils.debugStart(TAG, "scheduled update execution")
+
+        val startTime = System.currentTimeMillis()
+        var success = true
+        val operationsPerformed = mutableListOf<String>()
+
         try {
+            LoggingUtils.info(TAG, "=== SCHEDULED UPDATE STARTED ===")
+
             if (config.enableServerVersionUpdates) {
-                module.getServerVersionManager().updateAllVersions()
+                LoggingUtils.debug(TAG, "Executing server version updates...")
+                try {
+                    val result = module.getServerVersionManager().updateAllVersions()
+                    if (result) {
+                        LoggingUtils.debug(TAG, "Server version updates completed successfully")
+                        operationsPerformed.add("server_versions")
+                    } else {
+                        LoggingUtils.warn(TAG, "Server version updates failed")
+                        success = false
+                    }
+                } catch (e: Exception) {
+                    LoggingUtils.error(TAG, "Error during server version updates: ${e.message}", e)
+                    success = false
+                }
+            } else {
+                LoggingUtils.debug(TAG, "Server version updates disabled")
             }
 
             if (config.enablePluginUpdates) {
-                module.getPluginManager().ensureAllPluginsDownloaded()
+                LoggingUtils.debug(TAG, "Executing plugin updates...")
+                try {
+                    val result = module.getPluginManager().ensureAllPluginsDownloaded()
+                    if (result) {
+                        LoggingUtils.debug(TAG, "Plugin updates completed successfully")
+                        operationsPerformed.add("plugins")
+                    } else {
+                        LoggingUtils.warn(TAG, "Plugin updates failed")
+                        success = false
+                    }
+                } catch (e: Exception) {
+                    LoggingUtils.error(TAG, "Error during plugin updates: ${e.message}", e)
+                    success = false
+                }
+            } else {
+                LoggingUtils.debug(TAG, "Plugin updates disabled")
             }
 
             if (config.enableTemplateSync) {
-                module.getTemplateManager().syncAllTemplates()
-                module.getTemplateManager().syncStaticServersOnRestart()
+                LoggingUtils.debug(TAG, "Executing template synchronization...")
+                try {
+                    val syncResult = module.getTemplateManager().syncAllTemplates()
+                    val staticResult = module.getTemplateManager().syncStaticServersOnRestart()
+
+                    if (syncResult && staticResult) {
+                        LoggingUtils.debug(TAG, "Template synchronization completed successfully")
+                        operationsPerformed.add("templates")
+                    } else {
+                        LoggingUtils.warn(TAG, "Template synchronization failed (sync: $syncResult, static: $staticResult)")
+                        success = false
+                    }
+                } catch (e: Exception) {
+                    LoggingUtils.error(TAG, "Error during template synchronization: ${e.message}", e)
+                    success = false
+                }
+            } else {
+                LoggingUtils.debug(TAG, "Template synchronization disabled")
             }
+
+            val duration = System.currentTimeMillis() - startTime
+            val stats = mapOf(
+                "duration_ms" to duration,
+                "duration_seconds" to duration / 1000,
+                "operations_performed" to operationsPerformed,
+                "success" to success
+            )
+
+            LoggingUtils.debugStats(TAG, stats)
+
+            val resultMessage = if (success) "SUCCESS" else "PARTIAL FAILURE"
+            LoggingUtils.info(TAG, "=== SCHEDULED UPDATE COMPLETED: $resultMessage (${duration}ms) ===")
+
+            if (success) {
+                LoggingUtils.debugSuccess(TAG, "scheduled update execution")
+            } else {
+                LoggingUtils.debugFailure(TAG, "scheduled update execution", "one or more operations failed")
+            }
+
         } catch (e: Exception) {
-            e.printStackTrace()
+            LoggingUtils.error(TAG, "Critical error during scheduled update: ${e.message}", e)
         }
     }
 
     private fun parseInterval(interval: String): Long {
+        LoggingUtils.debug(TAG, "Parsing interval: $interval")
+
         val regex = Regex("(\\d+)([smhd])")
         val match = regex.find(interval.lowercase())
-            ?: return TimeUnit.HOURS.toMillis(6)
 
-        val value = match.groupValues[1].toLongOrNull() ?: 6
-        return when (match.groupValues[2]) {
+        if (match == null) {
+            LoggingUtils.warn(TAG, "Invalid interval format: $interval, using default ${DEFAULT_INTERVAL_HOURS}h")
+            return TimeUnit.HOURS.toMillis(DEFAULT_INTERVAL_HOURS)
+        }
+
+        val value = match.groupValues[1].toLongOrNull()
+        if (value == null) {
+            LoggingUtils.warn(TAG, "Invalid interval value in: $interval, using default ${DEFAULT_INTERVAL_HOURS}h")
+            return TimeUnit.HOURS.toMillis(DEFAULT_INTERVAL_HOURS)
+        }
+
+        val unit = match.groupValues[2]
+        val millis = when (unit) {
             "s" -> TimeUnit.SECONDS.toMillis(value)
             "m" -> TimeUnit.MINUTES.toMillis(value)
             "h" -> TimeUnit.HOURS.toMillis(value)
             "d" -> TimeUnit.DAYS.toMillis(value)
-            else -> TimeUnit.HOURS.toMillis(value)
+            else -> {
+                LoggingUtils.warn(TAG, "Invalid interval unit in: $interval, using default ${DEFAULT_INTERVAL_HOURS}h")
+                TimeUnit.HOURS.toMillis(DEFAULT_INTERVAL_HOURS)
+            }
         }
+
+        LoggingUtils.debug(TAG, "Parsed interval: ${value}${unit} = ${millis}ms")
+        return millis
     }
 
     suspend fun forceUpdate(): Boolean {
+        LoggingUtils.info(TAG, "Force update requested")
+
         return try {
+            LoggingUtils.debug(TAG, "Executing force update...")
             runScheduledUpdate()
+            LoggingUtils.info(TAG, "Force update completed")
             true
         } catch (e: Exception) {
+            LoggingUtils.error(TAG, "Force update failed: ${e.message}", e)
             false
         }
     }
 
     fun getNextUpdateTime(): Long {
-        return System.currentTimeMillis() + parseInterval(config.updateInterval)
+        return if (isRunning && nextUpdateTime > 0) {
+            nextUpdateTime
+        } else {
+            System.currentTimeMillis() + parseInterval(config.updateInterval)
+        }
     }
 
     fun isRunning(): Boolean {
-        return currentJob?.isActive == true
+        val jobActive = currentJob?.isActive == true
+        LoggingUtils.debug(TAG, "Scheduler status - isRunning: $isRunning, jobActive: $jobActive")
+        return isRunning && jobActive
+    }
+
+    fun getStats(): Map<String, Any> {
+        val nextUpdate = getNextUpdateTime()
+        val timeUntilNext = if (nextUpdate > System.currentTimeMillis()) {
+            nextUpdate - System.currentTimeMillis()
+        } else 0L
+
+        return mapOf(
+            "is_running" to isRunning(),
+            "next_update_time" to nextUpdate,
+            "next_update_formatted" to java.time.Instant.ofEpochMilli(nextUpdate).toString(),
+            "time_until_next_ms" to timeUntilNext,
+            "time_until_next_minutes" to timeUntilNext / 1000 / 60,
+            "update_interval" to config.updateInterval,
+            "automation_enabled" to config.enableAutomation,
+            "job_active" to (currentJob?.isActive == true)
+        )
     }
 }
