@@ -53,7 +53,10 @@ data class AutoManagerConfig(
     val performance: PerformanceConfig = PerformanceConfig(),
 
     @JsonProperty("security")
-    val security: SecurityConfig = SecurityConfig()
+    val security: SecurityConfig = SecurityConfig(),
+
+    @JsonProperty("serverVersions")
+    val serverVersions: ServerVersionsConfig = ServerVersionsConfig()
 ) {
 
     data class PluginConfig(
@@ -102,7 +105,13 @@ data class AutoManagerConfig(
         val compressionEnabled: Boolean = false,
 
         @JsonProperty("syncStaticServices")
-        val syncStaticServices: Boolean = true
+        val syncStaticServices: Boolean = true,
+
+        @JsonProperty("protectedFiles")
+        val protectedFiles: List<String> = listOf("server.jar", "*.jar", "plugins/**"),
+
+        @JsonProperty("enableTemplateBackup")
+        val enableTemplateBackup: Boolean = true
     )
 
     data class NetworkingConfig(
@@ -206,6 +215,35 @@ data class AutoManagerConfig(
 
         @JsonProperty("quarantineDirectory")
         val quarantineDirectory: String = "quarantine"
+    )
+
+    data class ServerVersionsConfig(
+        @JsonProperty("keepOldVersions")
+        val keepOldVersions: Boolean = true,
+
+        @JsonProperty("maxVersionsPerType")
+        val maxVersionsPerType: Int = 5,
+
+        @JsonProperty("autoCleanupEnabled")
+        val autoCleanupEnabled: Boolean = false,
+
+        @JsonProperty("cleanupIntervalDays")
+        val cleanupIntervalDays: Int = 30,
+
+        @JsonProperty("preserveLatestVersions")
+        val preserveLatestVersions: Int = 3,
+
+        @JsonProperty("downloadDirectory")
+        val downloadDirectory: String = "storage/server-versions",
+
+        @JsonProperty("enableVersionCaching")
+        val enableVersionCaching: Boolean = true,
+
+        @JsonProperty("cacheExpirationHours")
+        val cacheExpirationHours: Int = 24,
+
+        @JsonProperty("enableIntegrityChecks")
+        val enableIntegrityChecks: Boolean = true
     )
 
     companion object {
@@ -347,6 +385,17 @@ data class AutoManagerConfig(
                     enableHostnameVerification = true,
                     blockUnknownSources = false,
                     quarantineDirectory = "quarantine"
+                ),
+                serverVersions = ServerVersionsConfig(
+                    keepOldVersions = true,
+                    maxVersionsPerType = 5,
+                    autoCleanupEnabled = false,
+                    cleanupIntervalDays = 30,
+                    preserveLatestVersions = 3,
+                    downloadDirectory = "storage/server-versions",
+                    enableVersionCaching = true,
+                    cacheExpirationHours = 24,
+                    enableIntegrityChecks = true
                 )
             )
         }
