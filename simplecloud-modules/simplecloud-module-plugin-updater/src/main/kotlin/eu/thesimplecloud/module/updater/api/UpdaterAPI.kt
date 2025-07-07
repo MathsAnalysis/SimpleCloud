@@ -1,6 +1,6 @@
 package eu.thesimplecloud.module.updater.api
 
-import eu.thesimplecloud.module.updater.manager.PluginManager
+import eu.thesimplecloud.module.updater.plugin.PluginManager
 import eu.thesimplecloud.module.updater.manager.ServerVersionManager
 import eu.thesimplecloud.module.updater.manager.TemplateManager
 import eu.thesimplecloud.module.updater.utils.LoggingUtils

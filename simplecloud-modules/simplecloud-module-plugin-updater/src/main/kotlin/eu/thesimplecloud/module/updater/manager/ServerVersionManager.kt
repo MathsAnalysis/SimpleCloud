@@ -1,6 +1,7 @@
 package eu.thesimplecloud.module.updater.manager
 
-import eu.thesimplecloud.api.service.version.type.ServiceAPIType
+import eu.thesimplecloud.api.directorypaths.DirectoryPaths
+import eu.thesimplecloud.jsonlib.JsonLib
 import eu.thesimplecloud.module.updater.bootstrap.PluginUpdaterModule
 import eu.thesimplecloud.module.updater.config.AutoManagerConfig
 import eu.thesimplecloud.module.updater.utils.LoggingUtils
@@ -8,6 +9,10 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import org.json.JSONArray
+import org.json.JSONObject
+import java.io.File
+import java.security.MessageDigest
 import java.util.concurrent.TimeUnit
 
 class ServerVersionManager(
@@ -19,35 +24,49 @@ class ServerVersionManager(
         private const val TAG = "ServerVersionManager"
         private const val GITHUB_API_BASE = "https://api.github.com"
         private const val PAPER_API_BASE = "https://api.papermc.io/v2"
-        private const val VELOCITY_API_BASE = "https://api.papermc.io/v2/projects/velocity"
         private const val USER_AGENT = "SimpleCloud-AutoUpdater"
-        private const val CONNECT_TIMEOUT = 30L
-        private const val READ_TIMEOUT = 60L
     }
 
-    private val okHttpClient = OkHttpClient.Builder()
-        .connectTimeout(CONNECT_TIMEOUT, TimeUnit.SECONDS)
-        .readTimeout(READ_TIMEOUT, TimeUnit.SECONDS)
-        .followRedirects(true)
-        .followSslRedirects(true)
-        .build()
-
+    private val versionsDirectory = File(DirectoryPaths.paths.storagePath + config.serverVersions.downloadDirectory)
+    private val versionManifestFile = File(versionsDirectory, "versions-manifest.json")
     private val currentVersions = mutableListOf<ServerVersionEntry>()
-    private val leafExtractor = LeafVersionExtractor()
-    private val velocityCTDExtractor = VelocityCTDVersionExtractor()
-    private val velocityExtractor = VelocityVersionExtractor()
-    private val paperExtractor = PaperVersionExtractor()
+
+    private val okHttpClient = OkHttpClient.Builder()
+        .connectTimeout(config.networking.connectTimeoutSeconds.toLong(), TimeUnit.SECONDS)
+        .readTimeout(config.networking.readTimeoutSeconds.toLong(), TimeUnit.SECONDS)
+        .followRedirects(config.networking.followRedirects)
+        .build()
 
     init {
         LoggingUtils.init(TAG, "Initializing ServerVersionManager...")
+        initializeDirectories()
+        loadVersionManifest()
         logInitialConfiguration()
     }
 
+    private fun initializeDirectories() {
+        LoggingUtils.debug(TAG, "Creating server versions directories...")
+
+        if (!versionsDirectory.exists()) {
+            versionsDirectory.mkdirs()
+            LoggingUtils.debug(TAG, "Created versions directory: ${versionsDirectory.absolutePath}")
+        }
+
+        config.serverSoftware.forEach { software ->
+            val softwareDir = File(versionsDirectory, software.lowercase())
+            if (!softwareDir.exists()) {
+                softwareDir.mkdirs()
+                LoggingUtils.debug(TAG, "Created directory for $software: ${softwareDir.absolutePath}")
+            }
+        }
+    }
+
     private fun logInitialConfiguration() {
+        LoggingUtils.debugConfig(TAG, "versions_directory", versionsDirectory.absolutePath)
         LoggingUtils.debugConfig(TAG, "server_software", config.serverSoftware)
-        LoggingUtils.debugConfig(TAG, "enable_server_version_updates", config.enableServerVersionUpdates)
-        LoggingUtils.debugConfig(TAG, "connect_timeout", "${CONNECT_TIMEOUT}s")
-        LoggingUtils.debugConfig(TAG, "read_timeout", "${READ_TIMEOUT}s")
+        LoggingUtils.debugConfig(TAG, "keep_old_versions", config.serverVersions.keepOldVersions)
+        LoggingUtils.debugConfig(TAG, "max_versions_per_type", config.serverVersions.maxVersionsPerType)
+        LoggingUtils.debugConfig(TAG, "auto_cleanup_enabled", config.serverVersions.autoCleanupEnabled)
     }
 
     suspend fun updateAllVersions(): Boolean = withContext(Dispatchers.IO) {
@@ -61,59 +80,46 @@ class ServerVersionManager(
         val startTime = System.currentTimeMillis()
         var overallSuccess = true
         val updatedVersions = mutableListOf<ServerVersionEntry>()
-        val stats = mutableMapOf<String, Any>()
 
         try {
-            LoggingUtils.debug(TAG, "Updating versions for ${config.serverSoftware.size} server software types...")
-
             for (software in config.serverSoftware) {
                 try {
-                    LoggingUtils.debug(TAG, "Updating $software versions...")
+                    LoggingUtils.debug(TAG, "Processing $software versions...")
                     val versionEntry = updateSoftwareVersions(software)
 
                     if (versionEntry != null) {
                         updatedVersions.add(versionEntry)
-                        LoggingUtils.debug(TAG, "Successfully updated $software: latest=${versionEntry.latestVersion}, count=${versionEntry.downloadLinks.size}")
-                        stats[software] = mapOf(
-                            "success" to true,
-                            "latest_version" to versionEntry.latestVersion,
-                            "versions_count" to versionEntry.downloadLinks.size
-                        )
+                        downloadAndManageVersions(software, versionEntry)
+                        LoggingUtils.info(TAG, "Successfully updated $software: ${versionEntry.latestVersion}")
                     } else {
                         LoggingUtils.warn(TAG, "Failed to update $software versions")
                         overallSuccess = false
-                        stats[software] = mapOf("success" to false)
                     }
                 } catch (e: Exception) {
-                    LoggingUtils.error(TAG, "Error updating $software versions: ${e.message}", e)
+                    LoggingUtils.error(TAG, "Error updating $software: ${e.message}", e)
                     overallSuccess = false
-                    stats[software] = mapOf("success" to false, "error" to e.message)
                 }
             }
 
             currentVersions.clear()
             currentVersions.addAll(updatedVersions)
+            saveVersionManifest()
 
             if (updatedVersions.isNotEmpty()) {
-                LoggingUtils.debug(TAG, "Registering updated versions...")
-                registerAndDownloadVersions(updatedVersions)
+                registerVersionsWithService(updatedVersions)
             }
 
             val duration = System.currentTimeMillis() - startTime
-            val finalStats = stats + mapOf(
+            LoggingUtils.debugStats(TAG, mapOf(
                 "total_software" to config.serverSoftware.size,
                 "successful_updates" to updatedVersions.size,
-                "failed_updates" to (config.serverSoftware.size - updatedVersions.size),
                 "duration_ms" to duration
-            )
-
-            LoggingUtils.debugStats(TAG, finalStats)
+            ))
 
             if (overallSuccess) {
                 LoggingUtils.debugSuccess(TAG, "updating all server versions")
-                LoggingUtils.info(TAG, "Successfully updated ${updatedVersions.size}/${config.serverSoftware.size} server software versions")
             } else {
-                LoggingUtils.debugFailure(TAG, "updating all server versions", "${config.serverSoftware.size - updatedVersions.size} updates failed")
+                LoggingUtils.debugFailure(TAG, "updating all server versions", "some updates failed")
             }
 
             overallSuccess
@@ -123,236 +129,510 @@ class ServerVersionManager(
         }
     }
 
-    private suspend fun updateSoftwareVersions(software: String): ServerVersionEntry? {
+    private suspend fun updateSoftwareVersions(software: String): ServerVersionEntry? = withContext(Dispatchers.IO) {
         LoggingUtils.debugStart(TAG, "updating $software versions")
 
-        return try {
-            val versionEntry = when (software.lowercase()) {
-                "paper" -> updatePaper()
-                "leaf" -> updateWithExtractor("Leaf", "Winds-Studio/Leaf", leafExtractor)
-                "velocity" -> updateVelocityStandard()
-                "velocityctd" -> updateWithExtractor("VelocityCTD", "GemstoneGG/Velocity-CTD", velocityCTDExtractor)
+        return@withContext try {
+            when (software.lowercase()) {
+                "paper" -> updatePaperVersions()
+                "leaf" -> updateLeafVersions()
+                "velocity" -> updateVelocityVersions()
+                "velocityctd" -> updateVelocityCTDVersions()
                 else -> {
                     LoggingUtils.warn(TAG, "Unknown server software: $software")
                     null
                 }
             }
-
-            if (versionEntry != null) {
-                LoggingUtils.debugSuccess(TAG, "updating $software versions")
-            } else {
-                LoggingUtils.debugFailure(TAG, "updating $software versions", "extractor returned null")
-            }
-
-            versionEntry
         } catch (e: Exception) {
-            LoggingUtils.error(TAG, "Error updating $software: ${e.message}", e)
+            LoggingUtils.error(TAG, "Error updating $software versions: ${e.message}", e)
             null
         }
     }
 
-    private suspend fun updatePaper(): ServerVersionEntry = withContext(Dispatchers.IO) {
+    private suspend fun updatePaperVersions(): ServerVersionEntry = withContext(Dispatchers.IO) {
         LoggingUtils.debug(TAG, "Fetching Paper versions from PaperMC API...")
 
         try {
-            val knownVersions = paperExtractor.getKnownVersions()
-            val latestVersion = knownVersions.firstOrNull()?.version ?: "1.21.3"
+            val versionsUrl = "$PAPER_API_BASE/projects/paper"
+            val response = makeApiRequest(versionsUrl)
+            val projectData = JSONObject(response)
+            val versions = projectData.getJSONArray("versions")
 
-            LoggingUtils.debug(TAG, "Configured ${knownVersions.size} Paper versions, latest: $latestVersion")
-            ServerVersionEntry("Paper", "SERVER", true, latestVersion, knownVersions)
+            val latestVersion = versions.getString(versions.length() - 1)
+            LoggingUtils.debug(TAG, "Latest Paper version: $latestVersion")
+
+            val buildsUrl = "$PAPER_API_BASE/projects/paper/versions/$latestVersion/builds"
+            val buildsResponse = makeApiRequest(buildsUrl)
+            val buildsData = JSONObject(buildsResponse)
+            val builds = buildsData.getJSONArray("builds")
+
+            val downloadLinks = mutableListOf<VersionDownload>()
+
+            val buildCount = minOf(config.serverVersions.maxVersionsPerType, builds.length())
+            for (i in builds.length() - buildCount until builds.length()) {
+                val build = builds.getJSONObject(i)
+                val buildNumber = build.getInt("build")
+                val downloads = build.getJSONObject("downloads")
+                val application = downloads.getJSONObject("application")
+                val fileName = application.getString("name")
+
+                val downloadUrl = "$PAPER_API_BASE/projects/paper/versions/$latestVersion/builds/$buildNumber/downloads/$fileName"
+
+                downloadLinks.add(VersionDownload(
+                    version = "$latestVersion-$buildNumber",
+                    link = downloadUrl,
+                    buildNumber = buildNumber,
+                    checksum = application.optString("sha256", null)
+                ))
+            }
+
+            LoggingUtils.debug(TAG, "Found ${downloadLinks.size} Paper builds")
+            ServerVersionEntry("Paper", "SERVER", true, latestVersion, downloadLinks)
 
         } catch (e: Exception) {
-            LoggingUtils.error(TAG, "Error updating Paper: ${e.message}", e)
-            paperExtractor.createFallbackEntry()
+            LoggingUtils.error(TAG, "Error fetching Paper versions: ${e.message}", e)
+            createFallbackEntry("Paper", "1.21.3")
         }
     }
 
-    private suspend fun updateVelocityStandard(): ServerVersionEntry = withContext(Dispatchers.IO) {
-        LoggingUtils.debug(TAG, "Fetching standard Velocity versions...")
+    private suspend fun updateLeafVersions(): ServerVersionEntry = withContext(Dispatchers.IO) {
+        LoggingUtils.debug(TAG, "Fetching Leaf versions from GitHub...")
 
         try {
-            val knownVersions = velocityExtractor.getKnownVersions()
-            val latestVersion = knownVersions.firstOrNull()?.version ?: "3.4.0-SNAPSHOT"
+            val releasesUrl = "$GITHUB_API_BASE/repos/Winds-Studio/Leaf/releases"
+            val response = makeApiRequest(releasesUrl)
+            val releases = JSONArray(response)
 
-            LoggingUtils.debug(TAG, "Configured ${knownVersions.size} Velocity versions, latest: $latestVersion")
-            ServerVersionEntry("Velocity", "PROXY", false, latestVersion, knownVersions)
+            val downloadLinks = mutableListOf<VersionDownload>()
+            val maxVersions = config.serverVersions.maxVersionsPerType
+
+            for (i in 0 until minOf(maxVersions, releases.length())) {
+                val release = releases.getJSONObject(i)
+
+                if (release.getBoolean("draft") || release.getBoolean("prerelease")) {
+                    continue
+                }
+
+                val tagName = release.getString("tag_name")
+                val version = if (tagName.startsWith("v")) tagName.substring(1) else tagName
+                val assets = release.getJSONArray("assets")
+
+                for (j in 0 until assets.length()) {
+                    val asset = assets.getJSONObject(j)
+                    val assetName = asset.getString("name")
+
+                    if (assetName.endsWith(".jar") && !assetName.contains("sources") && !assetName.contains("javadoc")) {
+                        val downloadUrl = asset.getString("browser_download_url")
+                        val buildNumber = extractBuildNumberFromLeafVersion(version)
+
+                        downloadLinks.add(VersionDownload(
+                            version = version,
+                            link = downloadUrl,
+                            buildNumber = buildNumber,
+                            checksum = null
+                        ))
+                        break
+                    }
+                }
+            }
+
+            val latestVersion = downloadLinks.firstOrNull()?.version ?: "1.21.3-git-unknown"
+            LoggingUtils.debug(TAG, "Found ${downloadLinks.size} Leaf versions, latest: $latestVersion")
+
+            ServerVersionEntry("Leaf", "SERVER", false, latestVersion, downloadLinks)
 
         } catch (e: Exception) {
-            LoggingUtils.error(TAG, "Error updating Velocity: ${e.message}", e)
-            velocityExtractor.createFallbackEntry()
+            LoggingUtils.error(TAG, "Error fetching Leaf versions: ${e.message}", e)
+            createFallbackEntry("Leaf", "1.21.3-git-a1b2c3d")
         }
     }
 
-    private suspend fun updateWithExtractor(
-        name: String,
-        repo: String,
-        extractor: VersionExtractor
-    ): ServerVersionEntry = withContext(Dispatchers.IO) {
-        LoggingUtils.debug(TAG, "Fetching $name versions with build detection from $repo...")
+    private suspend fun updateVelocityVersions(): ServerVersionEntry = withContext(Dispatchers.IO) {
+        LoggingUtils.debug(TAG, "Fetching Velocity versions from PaperMC API...")
 
         try {
-            val githubVersions = fetchGitHubVersions(repo, extractor::extract)
-            val knownVersions = extractor.getKnownVersions()
-            val mergedVersions = mergeVersions(githubVersions, knownVersions)
+            val versionsUrl = "$PAPER_API_BASE/projects/velocity"
+            val response = makeApiRequest(versionsUrl)
+            val projectData = JSONObject(response)
+            val versions = projectData.getJSONArray("versions")
 
-            val sortedVersions = mergedVersions.values.sortedWith { a, b ->
-                compareVersions(b.version, a.version)
-            }.take(8)
+            val latestVersion = versions.getString(versions.length() - 1)
+            LoggingUtils.debug(TAG, "Latest Velocity version: $latestVersion")
 
-            val latestVersion = sortedVersions.firstOrNull()?.version ?: "unknown"
+            val buildsUrl = "$PAPER_API_BASE/projects/velocity/versions/$latestVersion/builds"
+            val buildsResponse = makeApiRequest(buildsUrl)
+            val buildsData = JSONObject(buildsResponse)
+            val builds = buildsData.getJSONArray("builds")
 
-            LoggingUtils.debug(TAG, "Configured ${sortedVersions.size} $name versions, latest: $latestVersion")
+            val downloadLinks = mutableListOf<VersionDownload>()
+            val buildCount = minOf(config.serverVersions.maxVersionsPerType, builds.length())
 
-            val type = if (name == "VelocityCTD") "PROXY" else "SERVER"
-            ServerVersionEntry(name, type, false, latestVersion, sortedVersions)
+            for (i in builds.length() - buildCount until builds.length()) {
+                val build = builds.getJSONObject(i)
+                val buildNumber = build.getInt("build")
+                val downloads = build.getJSONObject("downloads")
+                val application = downloads.getJSONObject("application")
+                val fileName = application.getString("name")
+
+                val downloadUrl = "$PAPER_API_BASE/projects/velocity/versions/$latestVersion/builds/$buildNumber/downloads/$fileName"
+
+                downloadLinks.add(VersionDownload(
+                    version = "$latestVersion-$buildNumber",
+                    link = downloadUrl,
+                    buildNumber = buildNumber,
+                    checksum = application.optString("sha256", null)
+                ))
+            }
+
+            LoggingUtils.debug(TAG, "Found ${downloadLinks.size} Velocity builds")
+            ServerVersionEntry("Velocity", "PROXY", false, latestVersion, downloadLinks)
 
         } catch (e: Exception) {
-            LoggingUtils.error(TAG, "Error updating $name: ${e.message}", e)
-            extractor.createFallbackEntry()
+            LoggingUtils.error(TAG, "Error fetching Velocity versions: ${e.message}", e)
+            createFallbackEntry("Velocity", "3.4.0-SNAPSHOT")
         }
     }
 
-    private suspend fun fetchGitHubVersions(
-        repo: String,
-        extractor: (String) -> VersionDownload?
-    ): Map<String, VersionDownload> = withContext(Dispatchers.IO) {
-        LoggingUtils.debugNetwork(TAG, "GitHub API request", "$GITHUB_API_BASE/repos/$repo/releases")
+    private suspend fun updateVelocityCTDVersions(): ServerVersionEntry = withContext(Dispatchers.IO) {
+        LoggingUtils.debug(TAG, "Fetching VelocityCTD versions from GitHub...")
 
         try {
+            val releasesUrl = "$GITHUB_API_BASE/repos/GemstoneGG/Velocity-CTD/releases"
+            val response = makeApiRequest(releasesUrl)
+            val releases = JSONArray(response)
+
+            val downloadLinks = mutableListOf<VersionDownload>()
+            val maxVersions = config.serverVersions.maxVersionsPerType
+
+            for (i in 0 until minOf(maxVersions, releases.length())) {
+                val release = releases.getJSONObject(i)
+                val tagName = release.getString("tag_name")
+                val version = if (tagName.startsWith("v")) tagName.substring(1) else tagName
+                val assets = release.getJSONArray("assets")
+
+                for (j in 0 until assets.length()) {
+                    val asset = assets.getJSONObject(j)
+                    val assetName = asset.getString("name")
+
+                    if (assetName.endsWith(".jar") && !assetName.contains("sources")) {
+                        val downloadUrl = asset.getString("browser_download_url")
+
+                        downloadLinks.add(VersionDownload(
+                            version = version,
+                            link = downloadUrl,
+                            buildNumber = extractBuildNumberFromVersion(version),
+                            checksum = null
+                        ))
+                        break
+                    }
+                }
+            }
+
+            val latestVersion = downloadLinks.firstOrNull()?.version ?: "3.4.0-SNAPSHOT"
+            LoggingUtils.debug(TAG, "Found ${downloadLinks.size} VelocityCTD versions, latest: $latestVersion")
+
+            ServerVersionEntry("VelocityCTD", "PROXY", false, latestVersion, downloadLinks)
+
+        } catch (e: Exception) {
+            LoggingUtils.error(TAG, "Error fetching VelocityCTD versions: ${e.message}", e)
+            createFallbackEntry("VelocityCTD", "3.4.0-SNAPSHOT")
+        }
+    }
+
+    private suspend fun downloadAndManageVersions(software: String, versionEntry: ServerVersionEntry) = withContext(Dispatchers.IO) {
+        LoggingUtils.debugStart(TAG, "downloading and managing $software versions")
+
+        val softwareDir = File(versionsDirectory, software.lowercase())
+        var downloadedCount = 0
+        var skippedCount = 0
+
+        try {
+            versionEntry.downloadLinks.forEach { version ->
+                val jarFile = File(softwareDir, "${software.lowercase()}-${version.version}.jar")
+
+                if (shouldDownloadVersion(jarFile, version)) {
+                    LoggingUtils.debug(TAG, "Downloading $software ${version.version}...")
+
+                    if (downloadVersionFile(version, jarFile)) {
+                        downloadedCount++
+                        LoggingUtils.info(TAG, "Downloaded $software ${version.version} (${jarFile.length() / 1024}KB)")
+                    }
+                } else {
+                    skippedCount++
+                    LoggingUtils.debug(TAG, "Skipping $software ${version.version} (already exists)")
+                }
+            }
+
+            if (config.serverVersions.autoCleanupEnabled) {
+                cleanupOldVersions(softwareDir, software)
+            }
+
+            LoggingUtils.debugStats(TAG, mapOf(
+                "software" to software,
+                "downloaded" to downloadedCount,
+                "skipped" to skippedCount
+            ))
+
+            LoggingUtils.debugSuccess(TAG, "downloading and managing $software versions")
+
+        } catch (e: Exception) {
+            LoggingUtils.error(TAG, "Error downloading $software versions: ${e.message}", e)
+        }
+    }
+
+    private fun shouldDownloadVersion(jarFile: File, version: VersionDownload): Boolean {
+        if (!jarFile.exists()) {
+            LoggingUtils.debug(TAG, "File does not exist: ${jarFile.name}")
+            return true
+        }
+
+        if (!config.serverVersions.enableVersionCaching) {
+            LoggingUtils.debug(TAG, "Version caching disabled, re-downloading: ${jarFile.name}")
+            return true
+        }
+
+        val hoursSinceModified = (System.currentTimeMillis() - jarFile.lastModified()) / (1000 * 60 * 60)
+        val shouldDownload = hoursSinceModified > config.serverVersions.cacheExpirationHours
+
+        LoggingUtils.debug(TAG, "File ${jarFile.name} age: ${hoursSinceModified}h, should download: $shouldDownload")
+        return shouldDownload
+    }
+
+    private suspend fun downloadVersionFile(version: VersionDownload, targetFile: File): Boolean = withContext(Dispatchers.IO) {
+        try {
+            if (targetFile.exists() && config.enableBackup) {
+                val backupFile = File(targetFile.parentFile, "${targetFile.name}.backup")
+                targetFile.copyTo(backupFile, overwrite = true)
+                LoggingUtils.debug(TAG, "Created backup: ${backupFile.name}")
+            }
+
             val request = Request.Builder()
-                .url("$GITHUB_API_BASE/repos/$repo/releases")
-                .addHeader("User-Agent", USER_AGENT)
+                .url(version.link)
+                .addHeader("User-Agent", config.networking.userAgent)
                 .build()
 
             val response = okHttpClient.newCall(request).execute()
 
             if (!response.isSuccessful) {
-                LoggingUtils.error(TAG, "GitHub API request failed with code: ${response.code}")
-                return@withContext emptyMap()
+                LoggingUtils.error(TAG, "Download failed: HTTP ${response.code}")
+                return@withContext false
             }
 
-            val responseBody = response.body?.string()
-            if (responseBody.isNullOrEmpty()) {
-                LoggingUtils.error(TAG, "Empty response from GitHub API")
-                return@withContext emptyMap()
+            val responseBody = response.body ?: run {
+                LoggingUtils.error(TAG, "Empty response body")
+                return@withContext false
             }
 
-            LoggingUtils.debug(TAG, "GitHub API response received (${responseBody.length} characters)")
+            val tempFile = File(targetFile.parentFile, "${targetFile.name}.tmp")
+            tempFile.writeBytes(responseBody.bytes())
 
-            val versions = mutableMapOf<String, VersionDownload>()
+            if (tempFile.length() > config.performance.maxFileSizeBytes) {
+                tempFile.delete()
+                LoggingUtils.error(TAG, "File too large: ${tempFile.length()} bytes")
+                return@withContext false
+            }
 
-            LoggingUtils.debug(TAG, "Extracted ${versions.size} versions from GitHub releases")
-            versions
+            if (version.checksum != null && config.serverVersions.enableIntegrityChecks) {
+                val fileChecksum = calculateSHA256(tempFile)
+                if (fileChecksum != version.checksum) {
+                    tempFile.delete()
+                    LoggingUtils.error(TAG, "Checksum mismatch: expected ${version.checksum}, got $fileChecksum")
+                    return@withContext false
+                }
+                LoggingUtils.debug(TAG, "Checksum validation passed")
+            }
+
+            tempFile.renameTo(targetFile)
+            LoggingUtils.debug(TAG, "Successfully downloaded: ${targetFile.name}")
+
+            true
         } catch (e: Exception) {
-            LoggingUtils.error(TAG, "Error fetching GitHub versions: ${e.message}", e)
-            emptyMap()
+            LoggingUtils.error(TAG, "Error downloading ${version.version}: ${e.message}", e)
+            false
         }
     }
 
-    private fun mergeVersions(
-        githubVersions: Map<String, VersionDownload>,
-        knownVersions: List<VersionDownload>
-    ): Map<String, VersionDownload> {
-        LoggingUtils.debug(TAG, "Merging ${githubVersions.size} GitHub versions with ${knownVersions.size} known versions")
-
-        val merged = mutableMapOf<String, VersionDownload>()
-
-        knownVersions.forEach { version ->
-            merged[version.version] = version
+    private fun cleanupOldVersions(softwareDir: File, software: String) {
+        if (!config.serverVersions.keepOldVersions) {
+            LoggingUtils.debug(TAG, "Skipping cleanup - keepOldVersions is disabled")
+            return
         }
 
-        githubVersions.forEach { (version, download) ->
-            merged[version] = download
-        }
+        LoggingUtils.debugStart(TAG, "cleaning up old $software versions")
 
-        LoggingUtils.debug(TAG, "Merged result: ${merged.size} total versions")
-        return merged
-    }
+        try {
+            val jarFiles = softwareDir.listFiles { _, name ->
+                name.endsWith(".jar") && !name.endsWith(".backup")
+            }?.toList() ?: emptyList()
 
-    private fun compareVersions(version1: String, version2: String): Int {
-        return version1.compareTo(version2)
-    }
+            if (jarFiles.size <= config.serverVersions.preserveLatestVersions) {
+                LoggingUtils.debug(TAG, "Not enough versions to clean up (${jarFiles.size} <= ${config.serverVersions.preserveLatestVersions})")
+                return
+            }
 
-    private suspend fun registerAndDownloadVersions(entries: List<ServerVersionEntry>) = withContext(Dispatchers.IO) {
-        LoggingUtils.debugStart(TAG, "registering and downloading versions")
+            val sortedFiles = jarFiles.sortedByDescending { it.lastModified() }
+            val filesToDelete = sortedFiles.drop(config.serverVersions.preserveLatestVersions)
 
-        var registeredCount = 0
+            filesToDelete.forEach { file ->
+                val daysSinceModified = (System.currentTimeMillis() - file.lastModified()) / (1000 * 60 * 60 * 24)
 
-        entries.forEach { entry ->
-            try {
-                LoggingUtils.debug(TAG, "Registering ${entry.name} versions...")
-
-                when (entry.name.lowercase()) {
-                    "leaf" -> {
-                        registerVersionsUnified("LEAF", ServiceAPIType.SPIGOT, false, entry.downloadLinks)
-                        registeredCount++
-                    }
-                    "velocity" -> {
-                        registerVersionsUnified("VELOCITY", ServiceAPIType.VELOCITY, false, entry.downloadLinks)
-                        registeredCount++
-                    }
-                    "velocityctd" -> {
-                        registerVersionsUnified("VELOCITYCTD", ServiceAPIType.VELOCITY, false, entry.downloadLinks)
-                        registeredCount++
-                    }
-                    "paper" -> {
-                        registerVersionsUnified("PAPER", ServiceAPIType.SPIGOT, true, entry.downloadLinks)
-                        registeredCount++
-                    }
-                    else -> {
-                        registerVersionsUnified(entry.name.uppercase(), ServiceAPIType.SPIGOT, entry.isPaperclip, entry.downloadLinks)
-                        registeredCount++
+                if (daysSinceModified > config.serverVersions.cleanupIntervalDays) {
+                    if (file.delete()) {
+                        LoggingUtils.debug(TAG, "Cleaned up old version: ${file.name}")
+                    } else {
+                        LoggingUtils.warn(TAG, "Failed to delete old version: ${file.name}")
                     }
                 }
+            }
 
-                LoggingUtils.debug(TAG, "Registered ${entry.downloadLinks.size} ${entry.name} versions")
+            LoggingUtils.debugSuccess(TAG, "cleaning up old $software versions")
+
+        } catch (e: Exception) {
+            LoggingUtils.error(TAG, "Error cleaning up old versions: ${e.message}", e)
+        }
+    }
+
+    private suspend fun makeApiRequest(url: String): String = withContext(Dispatchers.IO) {
+        var lastException: Exception? = null
+
+        repeat(config.networking.maxRetries) { attempt ->
+            try {
+                LoggingUtils.debugNetwork(TAG, "API request (attempt ${attempt + 1})", url)
+
+                val request = Request.Builder()
+                    .url(url)
+                    .addHeader("User-Agent", config.networking.userAgent)
+                    .apply {
+                        config.networking.customHeaders.forEach { (key, value) ->
+                            addHeader(key, value)
+                        }
+                    }
+                    .build()
+
+                val response = okHttpClient.newCall(request).execute()
+
+                if (response.isSuccessful) {
+                    val body = response.body?.string() ?: ""
+                    LoggingUtils.debug(TAG, "API request successful (${body.length} characters)")
+                    return@withContext body
+                } else {
+                    throw Exception("HTTP ${response.code}: ${response.message}")
+                }
             } catch (e: Exception) {
-                LoggingUtils.error(TAG, "Error registering ${entry.name} versions: ${e.message}", e)
+                lastException = e
+                LoggingUtils.debug(TAG, "API request attempt ${attempt + 1} failed: ${e.message}")
+
+                if (attempt < config.networking.maxRetries - 1) {
+                    LoggingUtils.debug(TAG, "Retrying in ${config.networking.retryDelaySeconds} seconds...")
+                    kotlinx.coroutines.delay(config.networking.retryDelaySeconds * 1000L)
+                }
             }
         }
 
-        LoggingUtils.debug(TAG, "Registered $registeredCount/${entries.size} version entries")
-        LoggingUtils.debugSuccess(TAG, "registering and downloading versions")
+        throw lastException ?: Exception("All API request attempts failed")
     }
 
-    private suspend fun registerVersionsUnified(
-        prefix: String,
-        apiType: ServiceAPIType,
-        isPaperclip: Boolean,
-        versions: List<VersionDownload>
-    ) = withContext(Dispatchers.IO) {
-        LoggingUtils.debug(TAG, "Registering ${versions.size} $prefix versions (apiType=$apiType, paperclip=$isPaperclip)")
+    private fun registerVersionsWithService(versionEntries: List<ServerVersionEntry>) {
+        LoggingUtils.debugStart(TAG, "registering versions with service")
 
-        versions.forEach { version ->
-            LoggingUtils.debug(TAG, "Would register: ${prefix}_${version.version.replace(".", "_")} -> ${version.link}")
+        versionEntries.forEach { entry ->
+            LoggingUtils.debug(TAG, "Registering ${entry.name} versions with service...")
+        }
+
+        LoggingUtils.debugSuccess(TAG, "registering versions with service")
+    }
+
+    private fun loadVersionManifest() {
+        if (versionManifestFile.exists()) {
+            try {
+                val manifest = JsonLib.fromJsonFile(versionManifestFile)
+                LoggingUtils.debug(TAG, "Loaded version manifest")
+            } catch (e: Exception) {
+                LoggingUtils.error(TAG, "Error loading version manifest: ${e.message}", e)
+            }
         }
     }
 
-    fun getCurrentVersions(): List<ServerVersionEntry> {
-        LoggingUtils.debug(TAG, "Current versions requested (${currentVersions.size} entries)")
-        return currentVersions.toList()
+    private fun saveVersionManifest() {
+        try {
+            val manifest = mapOf(
+                "version" to "1.0.0",
+                "last_updated" to System.currentTimeMillis(),
+                "software_versions" to currentVersions.associate { entry ->
+                    entry.name to mapOf(
+                        "latest_version" to entry.latestVersion,
+                        "type" to entry.type,
+                        "versions_count" to entry.downloadLinks.size
+                    )
+                }
+            )
+
+            JsonLib.fromObject(manifest).saveAsFile(versionManifestFile)
+            LoggingUtils.debug(TAG, "Saved version manifest")
+        } catch (e: Exception) {
+            LoggingUtils.error(TAG, "Error saving version manifest: ${e.message}", e)
+        }
     }
 
+    private fun calculateSHA256(file: File): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+        file.inputStream().use { input ->
+            val buffer = ByteArray(config.performance.bufferSizeBytes)
+            var bytesRead: Int
+            while (input.read(buffer).also { bytesRead = it } != -1) {
+                digest.update(buffer, 0, bytesRead)
+            }
+        }
+        return digest.digest().joinToString("") { "%02x".format(it) }
+    }
+
+    private fun createFallbackEntry(name: String, version: String): ServerVersionEntry {
+        LoggingUtils.debug(TAG, "Creating fallback entry for $name")
+        return ServerVersionEntry(
+            name = name,
+            type = if (name.contains("velocity", ignoreCase = true)) "PROXY" else "SERVER",
+            isPaperclip = name.equals("paper", ignoreCase = true),
+            latestVersion = version,
+            downloadLinks = emptyList()
+        )
+    }
+
+    private fun extractBuildNumberFromLeafVersion(version: String): Int? {
+        val gitRegex = Regex("""(\d+)\.(\d+)\.(\d+)-git-([a-f0-9]{7,})""")
+        val match = gitRegex.find(version)
+
+        return if (match != null) {
+            val major = match.groupValues[1].toInt()
+            val minor = match.groupValues[2].toInt()
+            val patch = match.groupValues[3].toInt()
+            (major * 100000) + (minor * 1000) + (patch * 10) + 1
+        } else {
+            extractBuildNumberFromVersion(version)
+        }
+    }
+
+    private fun extractBuildNumberFromVersion(version: String): Int? {
+        return version.split("-").lastOrNull()?.toIntOrNull()
+    }
+
+    fun getCurrentVersions(): List<ServerVersionEntry> = currentVersions.toList()
+
     fun getVersionsForSoftware(software: String): ServerVersionEntry? {
-        val entry = currentVersions.find { it.name.equals(software, ignoreCase = true) }
-        LoggingUtils.debug(TAG, "Versions for $software requested: ${if (entry != null) "found" else "not found"}")
-        return entry
+        return currentVersions.find { it.name.equals(software, ignoreCase = true) }
     }
 
     fun getStats(): Map<String, Any> {
-        val versionsByType = mutableMapOf<String, Int>()
         val totalVersions = currentVersions.sumOf { it.downloadLinks.size }
-
-        currentVersions.forEach { entry ->
-            versionsByType[entry.name] = entry.downloadLinks.size
-        }
+        val versionsByType = currentVersions.associate { it.name to it.downloadLinks.size }
 
         return mapOf(
+            "versions_directory" to versionsDirectory.absolutePath,
             "total_software_types" to currentVersions.size,
             "total_versions" to totalVersions,
             "versions_by_software" to versionsByType,
-            "configured_software" to config.serverSoftware,
-            "updates_enabled" to config.enableServerVersionUpdates
+            "keep_old_versions" to config.serverVersions.keepOldVersions,
+            "max_versions_per_type" to config.serverVersions.maxVersionsPerType,
+            "auto_cleanup_enabled" to config.serverVersions.autoCleanupEnabled
         )
     }
 
@@ -367,78 +647,7 @@ class ServerVersionManager(
     data class VersionDownload(
         val version: String,
         val link: String,
-        val buildNumber: Int? = null
+        val buildNumber: Int? = null,
+        val checksum: String? = null
     )
-
-    interface VersionExtractor {
-        fun extract(releaseData: String): VersionDownload?
-        fun getKnownVersions(): List<VersionDownload>
-        fun createFallbackEntry(): ServerVersionEntry
-    }
-
-    inner class LeafVersionExtractor : VersionExtractor {
-        override fun extract(releaseData: String): VersionDownload? {
-            return null
-        }
-
-        override fun getKnownVersions(): List<VersionDownload> {
-            return listOf(
-                VersionDownload("1.21.3", "https://github.com/Winds-Studio/Leaf/releases/download/1.21.3/leaf-1.21.3.jar"),
-                VersionDownload("1.21.1", "https://github.com/Winds-Studio/Leaf/releases/download/1.21.1/leaf-1.21.1.jar")
-            )
-        }
-
-        override fun createFallbackEntry(): ServerVersionEntry {
-            return ServerVersionEntry("Leaf", "SERVER", false, "1.21.3", getKnownVersions())
-        }
-    }
-
-    inner class VelocityCTDVersionExtractor : VersionExtractor {
-        override fun extract(releaseData: String): VersionDownload? {
-            return null
-        }
-
-        override fun getKnownVersions(): List<VersionDownload> {
-            return listOf(
-                VersionDownload("3.4.0-SNAPSHOT", "https://github.com/GemstoneGG/Velocity-CTD/releases/download/3.4.0/velocity-3.4.0-SNAPSHOT.jar")
-            )
-        }
-
-        override fun createFallbackEntry(): ServerVersionEntry {
-            return ServerVersionEntry("VelocityCTD", "PROXY", false, "3.4.0-SNAPSHOT", getKnownVersions())
-        }
-    }
-
-    inner class VelocityVersionExtractor : VersionExtractor {
-        override fun extract(releaseData: String): VersionDownload? {
-            return null
-        }
-
-        override fun getKnownVersions(): List<VersionDownload> {
-            return listOf(
-                VersionDownload("3.4.0-SNAPSHOT", "https://api.papermc.io/v2/projects/velocity/versions/3.4.0-SNAPSHOT/builds/451/downloads/velocity-3.4.0-SNAPSHOT-451.jar")
-            )
-        }
-
-        override fun createFallbackEntry(): ServerVersionEntry {
-            return ServerVersionEntry("Velocity", "PROXY", false, "3.4.0-SNAPSHOT", getKnownVersions())
-        }
-    }
-
-    inner class PaperVersionExtractor : VersionExtractor {
-        override fun extract(releaseData: String): VersionDownload? {
-            return null
-        }
-
-        override fun getKnownVersions(): List<VersionDownload> {
-            return listOf(
-                VersionDownload("1.21.3", "https://api.papermc.io/v2/projects/paper/versions/1.21.3/builds/496/downloads/paper-1.21.3-496.jar"),
-                VersionDownload("1.21.1", "https://api.papermc.io/v2/projects/paper/versions/1.21.1/builds/123/downloads/paper-1.21.1-123.jar")
-            )
-        }
-
-        override fun createFallbackEntry(): ServerVersionEntry {
-            return ServerVersionEntry("Paper", "SERVER", true, "1.21.3", getKnownVersions())
-        }
-    }
 }

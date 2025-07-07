@@ -1,22 +1,23 @@
-package eu.thesimplecloud.module.updater.manager
+package eu.thesimplecloud.module.updater.plugin
 
 import eu.thesimplecloud.api.directorypaths.DirectoryPaths
 import eu.thesimplecloud.jsonlib.JsonLib
 import eu.thesimplecloud.module.updater.config.AutoManagerConfig
-import eu.thesimplecloud.module.updater.plugin.PluginInfo
 import eu.thesimplecloud.module.updater.utils.LoggingUtils
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.io.File
+import java.time.Instant
+import java.time.LocalDateTime
 import java.util.concurrent.TimeUnit
 
 class PluginManager(private val config: AutoManagerConfig) {
 
     companion object {
         private const val TAG = "PluginManager"
-        private const val MAX_FILE_SIZE = 100 * 1024 * 1024
+        private const val MAX_FILE_SIZE = 100 * 1024 * 1024 // 100MB
         private const val UPDATE_INTERVAL_HOURS = 24
     }
 
@@ -67,7 +68,7 @@ class PluginManager(private val config: AutoManagerConfig) {
     }
 
     private fun log(message: String) {
-        val timestamp = java.time.LocalDateTime.now()
+        val timestamp = LocalDateTime.now()
         val logMessage = "[$timestamp] $message"
         LoggingUtils.info(TAG, message)
 
@@ -220,10 +221,12 @@ class PluginManager(private val config: AutoManagerConfig) {
 
             LoggingUtils.debug(TAG, "API response received (${responseBody.length} characters)")
 
+            // Create platforms map with correct structure
             val platformsMap = platforms.associateWith { platform ->
                 "https://api.spiget.org/v2/resources/$pluginName/download"
             }
 
+            // Use the PluginInfo.create factory method for consistency
             val pluginInfo = PluginInfo.create(
                 name = pluginName,
                 version = "latest",
@@ -431,7 +434,7 @@ class PluginManager(private val config: AutoManagerConfig) {
                             if (config.enableDebug && jarCount > 0) {
                                 platformDir.listFiles()?.filter { it.extension == "jar" }?.forEach { jar ->
                                     val sizeKB = jar.length() / 1024
-                                    val lastModified = java.time.Instant.ofEpochMilli(jar.lastModified())
+                                    val lastModified = Instant.ofEpochMilli(jar.lastModified())
                                     LoggingUtils.debug(TAG, "    - ${jar.name} (${sizeKB}KB, modified: $lastModified)")
                                 }
                             }
@@ -458,6 +461,102 @@ class PluginManager(private val config: AutoManagerConfig) {
         LoggingUtils.debug(TAG, "=== END DEBUG ===")
     }
 
+    fun cleanupTemporaryFiles() {
+        LoggingUtils.debugStart(TAG, "cleaning up temporary files")
+
+        try {
+            var cleanedCount = 0
+            var cleanedSize = 0L
+
+            // Clean temp directory if enabled
+            if (config.performance.cleanupTempFiles) {
+                val tempDir = File(config.performance.tempDirectory)
+                if (tempDir.exists()) {
+                    tempDir.listFiles()?.forEach { file ->
+                        val size = file.length()
+                        if (file.deleteRecursively()) {
+                            cleanedCount++
+                            cleanedSize += size
+                            LoggingUtils.debug(TAG, "Cleaned temp file: ${file.name}")
+                        }
+                    }
+                }
+            }
+
+            // Clean .tmp files in plugins directory
+            cleanTmpFilesInDirectory(pluginsDirectory)?.let { (count, size) ->
+                cleanedCount += count
+                cleanedSize += size
+            }
+
+            // Clean old log files
+            cleanOldLogFiles()?.let { (count, size) ->
+                cleanedCount += count
+                cleanedSize += size
+            }
+
+            val stats = mapOf(
+                "files_cleaned" to cleanedCount,
+                "size_cleaned_mb" to cleanedSize / 1024 / 1024
+            )
+            LoggingUtils.debugStats(TAG, stats)
+
+            LoggingUtils.debugSuccess(TAG, "cleaning up temporary files")
+            LoggingUtils.info(TAG, "Cleaned $cleanedCount temporary files (${cleanedSize / 1024 / 1024}MB)")
+
+        } catch (e: Exception) {
+            LoggingUtils.error(TAG, "Error cleaning temporary files: ${e.message}", e)
+        }
+    }
+
+    private fun cleanTmpFilesInDirectory(directory: File): Pair<Int, Long>? {
+        if (!directory.exists()) return null
+
+        var count = 0
+        var size = 0L
+
+        directory.listFiles()?.forEach { file ->
+            if (file.isDirectory) {
+                cleanTmpFilesInDirectory(file)?.let { (subCount, subSize) ->
+                    count += subCount
+                    size += subSize
+                }
+            } else if (file.name.endsWith(".tmp") || file.name.endsWith(".temp")) {
+                size += file.length()
+                if (file.delete()) {
+                    count++
+                    LoggingUtils.debug(TAG, "Cleaned temp file: ${file.relativeTo(pluginsDirectory)}")
+                }
+            }
+        }
+
+        return Pair(count, size)
+    }
+
+    private fun cleanOldLogFiles(): Pair<Int, Long>? {
+        if (!logsDirectory.exists()) return null
+
+        var count = 0
+        var size = 0L
+        val maxAge = 7 * 24 * 60 * 60 * 1000L // 7 days
+        val currentTime = System.currentTimeMillis()
+
+        logsDirectory.listFiles()?.forEach { file ->
+            if (file.isFile && file.name.startsWith("plugin-manager-")) {
+                val age = currentTime - file.lastModified()
+                if (age > maxAge) {
+                    size += file.length()
+                    if (file.delete()) {
+                        count++
+                        LoggingUtils.debug(TAG, "Cleaned old log file: ${file.name}")
+                    }
+                }
+            }
+        }
+
+        return Pair(count, size)
+    }
+
     fun getStats(): Map<String, Any> {
         val enabledPlugins = config.plugins.filter { it.enabled }
         val downloadedPlugins = enabledPlugins.filter { isPluginAlreadyDownloaded(it) }
@@ -470,4 +569,5 @@ class PluginManager(private val config: AutoManagerConfig) {
             "update_interval_hours" to UPDATE_INTERVAL_HOURS
         )
     }
+
 }
