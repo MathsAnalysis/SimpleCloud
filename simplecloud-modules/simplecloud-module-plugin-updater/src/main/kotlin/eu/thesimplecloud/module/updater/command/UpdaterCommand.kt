@@ -209,6 +209,26 @@ class UpdaterCommand(private val module: PluginUpdaterModule) : ICommandHandler 
         }
     }
 
+    @CommandSubPath("toggle", "Enables or disables the automatic update")
+    fun handleToggle() {
+        LoggingUtils.info(TAG, "Toggle command executed")
+
+        val sender = Launcher.instance.consoleSender
+
+        try {
+            val config = module.getConfig()
+            config.enableAutomation = !config.enableAutomation
+            module.saveConfig()
+
+            sender.sendMessage("§7Automatic update is now ${if (config.enableAutoUpdate) "§aenabled" else "§cdisabled"}")
+            LoggingUtils.info(TAG, "Automatic update toggled to ${if (config.enableAutoUpdate) "enabled" else "disabled"}")
+
+        } catch (e: Exception) {
+            LoggingUtils.error(TAG, "Error toggling automatic update: ${e.message}", e)
+            sender.sendMessage("§cError toggling automatic update: ${e.message}")
+        }
+    }
+
     @CommandSubPath("debug", "Toggles debug mode or shows debug information")
     fun handleDebug() {
         LoggingUtils.debug(TAG, "Debug command executed")
