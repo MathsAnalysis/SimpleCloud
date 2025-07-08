@@ -7,7 +7,6 @@ import kotlinx.coroutines.sync.Semaphore
 import java.io.File
 import java.net.URL
 import java.nio.file.*
-import java.security.MessageDigest
 import java.util.concurrent.TimeUnit
 
 class AutomaticJarUpdater(private val module: PluginUpdaterModule) {

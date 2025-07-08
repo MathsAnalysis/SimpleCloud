@@ -339,10 +339,12 @@ class ServerVersionManager(
         }
     }
 
-    private suspend fun downloadAndManageVersions(software: String, versionEntry: ServerVersionEntry) = withContext(Dispatchers.IO) {
+    suspend fun downloadAndManageVersions(software: String, versionEntry: ServerVersionEntry) = withContext(Dispatchers.IO) {
         LoggingUtils.debugStart(TAG, "downloading and managing $software versions")
 
         val softwareDir = File(versionsDirectory, software.lowercase())
+        softwareDir.mkdirs()
+
         var downloadedCount = 0
         var skippedCount = 0
 
@@ -356,6 +358,8 @@ class ServerVersionManager(
                     if (downloadVersionFile(version, jarFile)) {
                         downloadedCount++
                         LoggingUtils.info(TAG, "Downloaded $software ${version.version} (${jarFile.length() / 1024}KB)")
+                    } else {
+                        LoggingUtils.error(TAG, "Failed to download $software ${version.version}")
                     }
                 } else {
                     skippedCount++
@@ -377,6 +381,7 @@ class ServerVersionManager(
 
         } catch (e: Exception) {
             LoggingUtils.error(TAG, "Error downloading $software versions: ${e.message}", e)
+            throw e
         }
     }
 
