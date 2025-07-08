@@ -16,6 +16,8 @@ import eu.thesimplecloud.module.updater.updater.AutomaticJarUpdater
 import eu.thesimplecloud.module.updater.utils.LoggingUtils
 import kotlinx.coroutines.*
 import java.io.File
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 import java.time.LocalDateTime
 import java.time.LocalTime
 
@@ -194,14 +196,15 @@ class PluginUpdaterModule : ICloudModule {
                 success = templateManager.syncStaticServersOnRestart() && success
             }
 
-            if (success && ::automaticJarUpdater.isInitialized) {
-                println("[AutoManager] Triggering automatic JAR updates...")
+            if (success && config.enableServerVersionUpdates) {
+                println("[AutoManager] Updating JAR files in minecraftJars and templates...")
                 try {
-                    GlobalScope.launch {
-                        automaticJarUpdater.performSmartUpdate()
-                    }
+                    updateMinecraftJarsAndTemplates()
+                    println("[AutoManager] JAR update completed successfully")
                 } catch (e: Exception) {
-                    println("[AutoManager] Error during JAR update: ${e.message}")
+                    println("[AutoManager] Error updating JARs: ${e.message}")
+                    e.printStackTrace()
+                    success = false
                 }
             }
 
@@ -210,6 +213,122 @@ class PluginUpdaterModule : ICloudModule {
             println("[AutoManager] Error during scheduled update: ${e.message}")
             e.printStackTrace()
         }
+    }
+
+    private suspend fun updateMinecraftJarsAndTemplates() = withContext(Dispatchers.IO) {
+        val minecraftJarsDir = File(DirectoryPaths.paths.minecraftJarsPath)
+        val serverVersionsDir = File(DirectoryPaths.paths.storagePath + "server-versions")
+        val templatesDir = File(DirectoryPaths.paths.templatesPath)
+
+        if (!minecraftJarsDir.exists()) minecraftJarsDir.mkdirs()
+
+        updateLeafJarFiles(serverVersionsDir, minecraftJarsDir, templatesDir)
+
+        updateVelocityCTDJarFiles(serverVersionsDir, minecraftJarsDir, templatesDir)
+    }
+
+    private fun updateLeafJarFiles(serverVersionsDir: File, minecraftJarsDir: File, templatesDir: File) {
+        try {
+            val leafDir = File(serverVersionsDir, "leaf")
+            if (!leafDir.exists()) {
+                println("[AutoManager] Leaf versions directory not found")
+                return
+            }
+
+            val latestLeafJar = leafDir.listFiles()?.filter { it.name.endsWith(".jar") }
+                ?.maxByOrNull { it.lastModified() }
+
+            if (latestLeafJar != null) {
+                val targetJar = File(minecraftJarsDir, "LEAF_${sanitizeVersion(latestLeafJar.nameWithoutExtension)}.jar")
+
+                if (!targetJar.exists()) {
+                    Files.copy(latestLeafJar.toPath(), targetJar.toPath(), StandardCopyOption.REPLACE_EXISTING)
+                    println("[AutoManager] Copied ${latestLeafJar.name} to minecraftJars")
+                }
+
+                updateServerTemplates(templatesDir, targetJar)
+            }
+        } catch (e: Exception) {
+            println("[AutoManager] Error updating Leaf JAR: ${e.message}")
+            e.printStackTrace()
+        }
+    }
+
+    private fun updateVelocityCTDJarFiles(serverVersionsDir: File, minecraftJarsDir: File, templatesDir: File) {
+        try {
+            val velocityCTDDir = File(serverVersionsDir, "velocityctd")
+            if (!velocityCTDDir.exists()) {
+                println("[AutoManager] VelocityCTD versions directory not found")
+                return
+            }
+
+            val latestVelocityJar = velocityCTDDir.listFiles()?.filter { it.name.endsWith(".jar") }
+                ?.maxByOrNull { it.lastModified() }
+
+            if (latestVelocityJar != null) {
+                val targetJar = File(minecraftJarsDir, "VELOCITYCTD_${sanitizeVersion(latestVelocityJar.nameWithoutExtension)}.jar")
+
+                if (!targetJar.exists()) {
+                    Files.copy(latestVelocityJar.toPath(), targetJar.toPath(), StandardCopyOption.REPLACE_EXISTING)
+                    println("[AutoManager] Copied ${latestVelocityJar.name} to minecraftJars")
+                }
+
+                updateProxyTemplates(templatesDir, targetJar)
+            }
+        } catch (e: Exception) {
+            println("[AutoManager] Error updating VelocityCTD JAR: ${e.message}")
+            e.printStackTrace()
+        }
+    }
+
+    private fun updateServerTemplates(templatesDir: File, newJar: File) {
+        templatesDir.listFiles()?.forEach { templateDir ->
+            if (templateDir.isDirectory) {
+                val isServerTemplate = !File(templateDir, "velocity.toml").exists() &&
+                        !File(templateDir, "config.yml").exists()
+
+                if (isServerTemplate) {
+                    val serverJar = File(templateDir, "server.jar")
+
+                    // Backup del JAR esistente
+                    if (serverJar.exists() && config.templates.enableTemplateBackup) {
+                        val backupFile = File(templateDir, "server.jar.backup-${System.currentTimeMillis()}")
+                        Files.copy(serverJar.toPath(), backupFile.toPath(), StandardCopyOption.REPLACE_EXISTING)
+                        println("[AutoManager] Backup created: ${templateDir.name}/server.jar.backup")
+                    }
+
+                    // Copia il nuovo JAR
+                    Files.copy(newJar.toPath(), serverJar.toPath(), StandardCopyOption.REPLACE_EXISTING)
+                    println("[AutoManager] Updated ${templateDir.name}/server.jar")
+                }
+            }
+        }
+    }
+
+    private fun updateProxyTemplates(templatesDir: File, newJar: File) {
+        templatesDir.listFiles()?.forEach { templateDir ->
+            if (templateDir.isDirectory) {
+                val isProxyTemplate = File(templateDir, "velocity.toml").exists() ||
+                        File(templateDir, "config.yml").exists()
+
+                if (isProxyTemplate) {
+                    val velocityJar = File(templateDir, "velocity.jar")
+
+                    if (velocityJar.exists() && config.templates.enableTemplateBackup) {
+                        val backupFile = File(templateDir, "velocity.jar.backup-${System.currentTimeMillis()}")
+                        Files.copy(velocityJar.toPath(), backupFile.toPath(), StandardCopyOption.REPLACE_EXISTING)
+                        println("[AutoManager] Backup created: ${templateDir.name}/velocity.jar.backup")
+                    }
+
+                    Files.copy(newJar.toPath(), velocityJar.toPath(), StandardCopyOption.REPLACE_EXISTING)
+                    println("[AutoManager] Updated ${templateDir.name}/velocity.jar")
+                }
+            }
+        }
+    }
+
+    private fun sanitizeVersion(version: String): String {
+        return version.replace("[^a-zA-Z0-9._-]".toRegex(), "_")
     }
 
     private fun createDefaultConfig(): AutoManagerConfig {
