@@ -13,11 +13,11 @@ import eu.thesimplecloud.module.updater.manager.ServiceVersionRegistrar
 import eu.thesimplecloud.module.updater.manager.TemplateManager
 import eu.thesimplecloud.module.updater.thread.UpdateScheduler
 import eu.thesimplecloud.module.updater.updater.AutomaticJarUpdater
+import eu.thesimplecloud.module.updater.utils.LoggingUtils
 import kotlinx.coroutines.*
 import java.io.File
 import java.time.LocalDateTime
 import java.time.LocalTime
-import java.time.temporal.ChronoUnit
 
 class PluginUpdaterModule : ICloudModule {
 
@@ -161,35 +161,8 @@ class PluginUpdaterModule : ICloudModule {
     }
 
     private fun scheduleUpdates() {
-        if (config.updateTime.isNotEmpty()) {
-            scheduleNextUpdate()
-        } else {
-            updateScheduler.start()
-        }
-    }
-
-    private fun scheduleNextUpdate() {
-        try {
-            val updateTime = LocalTime.parse(config.updateTime)
-            val now = LocalDateTime.now()
-            var nextUpdate = now.with(updateTime)
-
-            if (nextUpdate.isBefore(now)) {
-                nextUpdate = nextUpdate.plusDays(1)
-            }
-
-            val delayMillis = now.until(nextUpdate, ChronoUnit.MILLIS)
-
-            println("[AutoManager] Next update scheduled at: $nextUpdate (in ${delayMillis / 1000 / 60} minutes)")
-
-            moduleScope.launch {
-                delay(delayMillis)
-                performScheduledUpdate()
-                scheduleNextUpdate()
-            }
-        } catch (e: Exception) {
-            println("[AutoManager] Error scheduling update: ${e.message}")
-        }
+        LoggingUtils.info("[UpdaterScheduler]", "Starting unified scheduler...")
+        updateScheduler.start()
     }
 
     private suspend fun performScheduledUpdate() {
@@ -283,7 +256,7 @@ class PluginUpdaterModule : ICloudModule {
         }
     }
 
-    private fun saveConfig() {
+    fun saveConfig() {
         try {
             configFile.parentFile.mkdirs()
             JsonLib.fromObject(AutoManagerConfig.toJson(config)).saveAsFile(configFile)

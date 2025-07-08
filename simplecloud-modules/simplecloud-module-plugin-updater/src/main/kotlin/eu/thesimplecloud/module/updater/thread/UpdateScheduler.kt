@@ -4,6 +4,9 @@ import eu.thesimplecloud.module.updater.bootstrap.PluginUpdaterModule
 import eu.thesimplecloud.module.updater.config.AutoManagerConfig
 import eu.thesimplecloud.module.updater.utils.LoggingUtils
 import kotlinx.coroutines.*
+import java.time.LocalDateTime
+import java.time.LocalTime
+import java.time.temporal.ChronoUnit
 import java.util.concurrent.TimeUnit
 
 class UpdateScheduler(
@@ -21,6 +24,7 @@ class UpdateScheduler(
     private var currentJob: Job? = null
     private var isRunning = false
     private var nextUpdateTime: Long = 0L
+    private var useTimeBasedScheduling = false
 
     init {
         LoggingUtils.init(TAG, "Initializing UpdateScheduler...")
@@ -49,16 +53,90 @@ class UpdateScheduler(
             return
         }
 
+        // Determina quale tipo di scheduling usare
+        useTimeBasedScheduling = config.updateTime.isNotEmpty()
+
+        if (useTimeBasedScheduling) {
+            LoggingUtils.info(TAG, "Using time-based scheduling: ${config.updateTime}")
+            startTimeBasedScheduling()
+        } else {
+            LoggingUtils.info(TAG, "Using interval-based scheduling: ${config.updateInterval}")
+            startIntervalBasedScheduling()
+        }
+
+        LoggingUtils.debugSuccess(TAG, "scheduler startup")
+    }
+
+    private fun startTimeBasedScheduling() {
+        try {
+            val updateTime = LocalTime.parse(config.updateTime)
+            LoggingUtils.debug(TAG, "Parsed update time: $updateTime")
+
+            currentJob = schedulerScope.launch {
+                try {
+                    isRunning = true
+                    LoggingUtils.info(TAG, "Time-based scheduler started with ${INITIAL_DELAY_SECONDS}s initial delay")
+
+                    delay(INITIAL_DELAY_SECONDS * 1000)
+                    LoggingUtils.debug(TAG, "Initial delay completed, starting time-based update cycle")
+
+                    while (isActive && isRunning) {
+                        try {
+                            // Calcola il prossimo aggiornamento
+                            val now = LocalDateTime.now()
+                            var nextUpdate = now.with(updateTime)
+
+                            // Se l'orario è già passato oggi, pianifica per domani
+                            if (nextUpdate.isBefore(now) || nextUpdate.isEqual(now)) {
+                                nextUpdate = nextUpdate.plusDays(1)
+                            }
+
+                            val delayMillis = now.until(nextUpdate, ChronoUnit.MILLIS)
+                            nextUpdateTime = System.currentTimeMillis() + delayMillis
+
+                            LoggingUtils.info(TAG, "Next update scheduled at: $nextUpdate (in ${delayMillis / 1000 / 60} minutes)")
+
+                            // Aspetta fino all'orario programmato
+                            delay(delayMillis)
+
+                            // Esegui l'aggiornamento
+                            if (isActive && isRunning) {
+                                LoggingUtils.info(TAG, "Executing scheduled update at ${LocalDateTime.now()}")
+                                runScheduledUpdate()
+                            }
+
+                        } catch (e: CancellationException) {
+                            LoggingUtils.debug(TAG, "Time-based update cycle cancelled")
+                            break
+                        } catch (e: Exception) {
+                            LoggingUtils.error(TAG, "Error in time-based update cycle: ${e.message}", e)
+                            LoggingUtils.warn(TAG, "Retrying in $ERROR_RETRY_MINUTES minutes...")
+                            delay(TimeUnit.MINUTES.toMillis(ERROR_RETRY_MINUTES))
+                        }
+                    }
+                } finally {
+                    isRunning = false
+                    LoggingUtils.info(TAG, "Time-based scheduler stopped")
+                }
+            }
+        } catch (e: Exception) {
+            LoggingUtils.error(TAG, "Error starting time-based scheduling: ${e.message}", e)
+            LoggingUtils.warn(TAG, "Falling back to interval-based scheduling")
+            startIntervalBasedScheduling()
+        }
+    }
+
+    private fun startIntervalBasedScheduling() {
         val intervalMillis = parseInterval(config.updateInterval)
         LoggingUtils.debug(TAG, "Parsed update interval: ${intervalMillis}ms (${intervalMillis / 1000 / 60} minutes)")
 
         currentJob = schedulerScope.launch {
             try {
                 isRunning = true
-                LoggingUtils.info(TAG, "Update scheduler started with ${INITIAL_DELAY_SECONDS}s initial delay")
+                LoggingUtils.info(TAG, "Interval-based scheduler started with ${INITIAL_DELAY_SECONDS}s initial delay")
 
                 delay(INITIAL_DELAY_SECONDS * 1000)
-                LoggingUtils.debug(TAG, "Initial delay completed, starting update cycle")
+                LoggingUtils.debug(TAG, "Initial delay completed, starting interval-based update cycle")
 
                 while (isActive && isRunning) {
                     try {
@@ -71,21 +149,19 @@ class UpdateScheduler(
                         delay(intervalMillis)
 
                     } catch (e: CancellationException) {
-                        LoggingUtils.debug(TAG, "Update cycle cancelled")
+                        LoggingUtils.debug(TAG, "Interval-based update cycle cancelled")
                         break
                     } catch (e: Exception) {
-                        LoggingUtils.error(TAG, "Error in update cycle: ${e.message}", e)
+                        LoggingUtils.error(TAG, "Error in interval-based update cycle: ${e.message}", e)
                         LoggingUtils.warn(TAG, "Retrying in $ERROR_RETRY_MINUTES minutes...")
                         delay(TimeUnit.MINUTES.toMillis(ERROR_RETRY_MINUTES))
                     }
                 }
             } finally {
                 isRunning = false
-                LoggingUtils.info(TAG, "Update scheduler stopped")
+                LoggingUtils.info(TAG, "Interval-based scheduler stopped")
             }
         }
-
-        LoggingUtils.debugSuccess(TAG, "scheduler startup")
     }
 
     fun shutdown() {
@@ -123,16 +199,24 @@ class UpdateScheduler(
         LoggingUtils.debug(TAG, "Updating scheduler configuration...")
 
         val oldInterval = config.updateInterval
+        val oldTime = config.updateTime
         val oldAutomation = config.enableAutomation
 
         this.config = newConfig
 
         LoggingUtils.debugConfig(TAG, "old_interval", oldInterval)
         LoggingUtils.debugConfig(TAG, "new_interval", newConfig.updateInterval)
+        LoggingUtils.debugConfig(TAG, "old_time", oldTime)
+        LoggingUtils.debugConfig(TAG, "new_time", newConfig.updateTime)
         LoggingUtils.debugConfig(TAG, "old_automation", oldAutomation)
         LoggingUtils.debugConfig(TAG, "new_automation", newConfig.enableAutomation)
 
-        if (currentJob?.isActive == true && (oldInterval != newConfig.updateInterval || oldAutomation != newConfig.enableAutomation)) {
+        // Riavvia il scheduler se la configurazione è cambiata
+        val scheduleChanged = oldInterval != newConfig.updateInterval ||
+                oldTime != newConfig.updateTime ||
+                oldAutomation != newConfig.enableAutomation
+
+        if (currentJob?.isActive == true && scheduleChanged) {
             LoggingUtils.debug(TAG, "Configuration changed, restarting scheduler...")
 
             currentJob?.cancel()
@@ -293,6 +377,23 @@ class UpdateScheduler(
     fun getNextUpdateTime(): Long {
         return if (isRunning && nextUpdateTime > 0) {
             nextUpdateTime
+        } else if (useTimeBasedScheduling && config.updateTime.isNotEmpty()) {
+            // Calcola il prossimo aggiornamento basato sull'orario
+            try {
+                val updateTime = LocalTime.parse(config.updateTime)
+                val now = LocalDateTime.now()
+                var nextUpdate = now.with(updateTime)
+
+                if (nextUpdate.isBefore(now) || nextUpdate.isEqual(now)) {
+                    nextUpdate = nextUpdate.plusDays(1)
+                }
+
+                val delayMillis = now.until(nextUpdate, ChronoUnit.MILLIS)
+                System.currentTimeMillis() + delayMillis
+            } catch (e: Exception) {
+                LoggingUtils.error(TAG, "Error calculating next update time: ${e.message}", e)
+                System.currentTimeMillis() + parseInterval(config.updateInterval)
+            }
         } else {
             System.currentTimeMillis() + parseInterval(config.updateInterval)
         }
@@ -300,7 +401,7 @@ class UpdateScheduler(
 
     fun isRunning(): Boolean {
         val jobActive = currentJob?.isActive == true
-        LoggingUtils.debug(TAG, "Scheduler status - isRunning: $isRunning, jobActive: $jobActive")
+        LoggingUtils.debug(TAG, "Scheduler status - isRunning: $isRunning, jobActive: $jobActive, useTimeBasedScheduling: $useTimeBasedScheduling")
         return isRunning && jobActive
     }
 
@@ -317,8 +418,10 @@ class UpdateScheduler(
             "time_until_next_ms" to timeUntilNext,
             "time_until_next_minutes" to timeUntilNext / 1000 / 60,
             "update_interval" to config.updateInterval,
+            "update_time" to config.updateTime,
             "automation_enabled" to config.enableAutomation,
-            "job_active" to (currentJob?.isActive == true)
+            "job_active" to (currentJob?.isActive == true),
+            "scheduling_type" to if (useTimeBasedScheduling) "time-based" else "interval-based"
         )
     }
 }
