@@ -1,15 +1,16 @@
-package eu.thesimplecloud.module.updater.plugin
+package eu.thesimplecloud.module.updater.manager
 
 import eu.thesimplecloud.api.directorypaths.DirectoryPaths
 import eu.thesimplecloud.jsonlib.JsonLib
 import eu.thesimplecloud.module.updater.config.AutoManagerConfig
+import eu.thesimplecloud.module.updater.plugin.PluginInfo
 import eu.thesimplecloud.module.updater.utils.LoggingUtils
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.io.File
-import java.time.Instant
+import java.net.URL
 import java.time.LocalDateTime
 import java.util.concurrent.TimeUnit
 
@@ -17,8 +18,6 @@ class PluginManager(private val config: AutoManagerConfig) {
 
     companion object {
         private const val TAG = "PluginManager"
-        private const val MAX_FILE_SIZE = 100 * 1024 * 1024 // 100MB
-        private const val UPDATE_INTERVAL_HOURS = 24
     }
 
     private val pluginsDirectory = File(DirectoryPaths.paths.storagePath + "plugins")
@@ -27,22 +26,21 @@ class PluginManager(private val config: AutoManagerConfig) {
     private val logFile = File(logsDirectory, "plugin-manager-${System.currentTimeMillis()}.log")
 
     private val okHttpClient = OkHttpClient.Builder()
-        .connectTimeout(30, TimeUnit.SECONDS)
-        .readTimeout(60, TimeUnit.SECONDS)
-        .writeTimeout(60, TimeUnit.SECONDS)
-        .followRedirects(true)
-        .followSslRedirects(true)
+        .connectTimeout(config.networking.connectTimeoutSeconds.toLong(), TimeUnit.SECONDS)
+        .readTimeout(config.networking.readTimeoutSeconds.toLong(), TimeUnit.SECONDS)
+        .writeTimeout(config.networking.writeTimeoutSeconds.toLong(), TimeUnit.SECONDS)
+        .followRedirects(config.networking.followRedirects)
+        .followSslRedirects(config.networking.enableHttps)
         .build()
 
     init {
         LoggingUtils.init(TAG, "Initializing PluginManager...")
-
         initializeDirectories()
         logInitialStats()
     }
 
     private fun initializeDirectories() {
-        LoggingUtils.debug(TAG, "Creating necessary directories...")
+        LoggingUtils.debug(TAG, "Ensuring necessary directories exist...")
 
         if (!pluginsDirectory.exists()) {
             pluginsDirectory.mkdirs()
@@ -173,73 +171,29 @@ class PluginManager(private val config: AutoManagerConfig) {
                     getPluginInfoFromCustomUrl(pluginConfig.name, pluginConfig.customUrl!!, pluginConfig.platforms)
                 }
                 else -> {
-                    LoggingUtils.debug(TAG, "Fetching plugin info from API for ${pluginConfig.name}")
-                    getPluginInfoFromAPI(pluginConfig.name, pluginConfig.platforms)
+                    when (pluginConfig.name.lowercase()) {
+                        "luckperms" -> updateLuckPerms(pluginConfig)
+                        "spark" -> updateSpark(pluginConfig)
+                        "floodgate" -> updateFloodgate(pluginConfig)
+                        "geyser" -> updateGeyser(pluginConfig)
+                        "protocollib" -> updateProtocolLib(pluginConfig)
+                        "placeholderapi" -> updatePlaceholderAPI(pluginConfig)
+                        else -> {
+                            if (pluginConfig.customUrl != null) {
+                                updateCustomPlugin(pluginConfig)
+                            } else {
+                                null
+                            }
+                        }
+                    }
                 }
             }
 
-            if (pluginInfo != null) {
-                LoggingUtils.debugSuccess(TAG, "plugin info retrieval for ${pluginConfig.name}")
-                if (config.enableDebug) {
-                    LoggingUtils.debug(TAG, "Retrieved plugin info:\n${pluginInfo.toDebugString()}")
-                } else {
-                    LoggingUtils.debug(TAG, "Retrieved plugin info: ${pluginInfo.toLogSummary()}")
-                }
-            } else {
-                LoggingUtils.debugFailure(TAG, "plugin info retrieval for ${pluginConfig.name}", "no plugin info returned")
-            }
-
+            LoggingUtils.debug(TAG, "Plugin info created: ${pluginInfo?.toLogSummary()}")
             pluginInfo
+
         } catch (e: Exception) {
             LoggingUtils.error(TAG, "Error updating plugin ${pluginConfig.name}: ${e.message}", e)
-            null
-        }
-    }
-
-    private suspend fun getPluginInfoFromAPI(pluginName: String, platforms: List<String>): PluginInfo? = withContext(Dispatchers.IO) {
-        LoggingUtils.debugNetwork(TAG, "API request", "plugin info for $pluginName")
-
-        try {
-            val apiUrl = "https://api.spiget.org/v2/search/resources/$pluginName?field=name"
-            val request = Request.Builder()
-                .url(apiUrl)
-                .addHeader("User-Agent", "SimpleCloud-AutoUpdater")
-                .build()
-
-            val response = okHttpClient.newCall(request).execute()
-
-            if (!response.isSuccessful) {
-                LoggingUtils.error(TAG, "API request failed with code: ${response.code}")
-                return@withContext null
-            }
-
-            val responseBody = response.body?.string()
-            if (responseBody.isNullOrEmpty()) {
-                LoggingUtils.error(TAG, "Empty response from API")
-                return@withContext null
-            }
-
-            LoggingUtils.debug(TAG, "API response received (${responseBody.length} characters)")
-
-            // Create platforms map with correct structure
-            val platformsMap = platforms.associateWith { platform ->
-                "https://api.spiget.org/v2/resources/$pluginName/download"
-            }
-
-            // Use the PluginInfo.create factory method for consistency
-            val pluginInfo = PluginInfo.create(
-                name = pluginName,
-                version = "latest",
-                platforms = platformsMap,
-                checksum = null,
-                fileSize = null
-            )
-
-            LoggingUtils.debug(TAG, "Created PluginInfo: ${pluginInfo.toLogSummary()}")
-            return@withContext pluginInfo
-
-        } catch (e: Exception) {
-            LoggingUtils.error(TAG, "Error fetching plugin info from API: ${e.message}", e)
             null
         }
     }
@@ -259,6 +213,212 @@ class PluginManager(private val config: AutoManagerConfig) {
 
         LoggingUtils.debug(TAG, "Created custom PluginInfo: ${pluginInfo.toLogSummary()}")
         return pluginInfo
+    }
+
+    private suspend fun updateFloodgate(pluginConfig: AutoManagerConfig.PluginConfig): PluginInfo =
+        withContext(Dispatchers.IO) {
+            val platforms = mutableMapOf<String, String>()
+
+            pluginConfig.platforms.forEach { platform ->
+                val mappedPlatform = when (platform) {
+                    "bukkit" -> "spigot"
+                    "bungeecord" -> "bungee"
+                    else -> platform
+                }
+
+                val downloadUrl = "https://download.geysermc.org/v2/projects/floodgate/versions/latest/builds/latest/downloads/floodgate-$mappedPlatform.jar"
+                platforms[platform] = downloadUrl
+            }
+
+            PluginInfo(
+                name = "Floodgate",
+                version = "latest",
+                platforms = platforms,
+                lastUpdated = System.currentTimeMillis().toString()
+            )
+        }
+
+    private suspend fun updateGeyser(pluginConfig: AutoManagerConfig.PluginConfig): PluginInfo =
+        withContext(Dispatchers.IO) {
+            val response = URL("https://download.geysermc.org/v2/projects/geyser/versions/latest/builds/latest").readText()
+            val data = JsonLib.Companion.fromJsonString(response)!!
+
+            val version = data.getString("version")!!
+            val downloads = data.getProperty("downloads")!!.getAsJsonArray("downloads")!!
+
+            val platforms = mutableMapOf<String, String>()
+
+            pluginConfig.platforms.forEach { platform ->
+                val mappedPlatform = when (platform) {
+                    "bukkit" -> "spigot"
+                    "bungeecord" -> "bungee"
+                    else -> platform
+                }
+
+                val download = downloads.find { download ->
+                    val name = download.getAsJsonObject().get("name").asString
+                    name.contains(mappedPlatform, true)
+                }
+
+                download?.let {
+                    val downloadPath = it.getAsJsonObject().get("path").asString
+                    val downloadUrl = "https://download.geysermc.org/v2/projects/geyser/versions/latest/builds/latest/downloads/$downloadPath"
+                    platforms[platform] = downloadUrl
+                }
+            }
+
+            PluginInfo(
+                name = "Geyser",
+                version = version,
+                platforms = platforms,
+                lastUpdated = System.currentTimeMillis().toString()
+            )
+        }
+
+    private suspend fun updateLuckPerms(pluginConfig: AutoManagerConfig.PluginConfig): PluginInfo =
+        withContext(Dispatchers.IO) {
+            val response = URL("https://metadata.luckperms.net/data/downloads").readText()
+            val data = JsonLib.fromJsonString(response)!!
+
+            val version = data.getString("version")!!
+            val downloads = data.getProperty("downloads")!!
+
+            val platforms = mutableMapOf<String, String>()
+
+            pluginConfig.platforms.forEach { platform ->
+                val mappedPlatform = when (platform) {
+                    "bukkit" -> "bukkit"
+                    "bungeecord" -> "bungee"
+                    "velocity" -> "velocity"
+                    else -> platform
+                }
+
+                try {
+                    val url = downloads.getString(mappedPlatform)
+                    if (url != null) {
+                        platforms[platform] = url
+                    }
+                } catch (e: Exception) {
+                    LoggingUtils.debug(TAG, "Platform $mappedPlatform not found for LuckPerms")
+                }
+            }
+
+            PluginInfo(
+                name = "LuckPerms",
+                version = version,
+                platforms = platforms,
+                lastUpdated = System.currentTimeMillis().toString()
+            )
+        }
+
+    private suspend fun updateSpark(pluginConfig: AutoManagerConfig.PluginConfig): PluginInfo =
+        withContext(Dispatchers.IO) {
+            val platforms = mutableMapOf<String, String>()
+
+            pluginConfig.platforms.forEach { platform ->
+                val url = when (platform) {
+                    "bukkit" -> "https://ci.lucko.me/job/spark/lastSuccessfulBuild/artifact/spark-bukkit/build/libs/spark-bukkit.jar"
+                    "bungeecord" -> "https://ci.lucko.me/job/spark/lastSuccessfulBuild/artifact/spark-bungeecord/build/libs/spark-bungeecord.jar"
+                    "velocity" -> "https://ci.lucko.me/job/spark/lastSuccessfulBuild/artifact/spark-velocity/build/libs/spark-velocity.jar"
+                    else -> null
+                }
+
+                url?.let { platforms[platform] = it }
+            }
+
+            PluginInfo(
+                name = "Spark",
+                version = "latest",
+                platforms = platforms,
+                lastUpdated = System.currentTimeMillis().toString()
+            )
+        }
+
+    private suspend fun updateProtocolLib(pluginConfig: AutoManagerConfig.PluginConfig): PluginInfo =
+        withContext(Dispatchers.IO) {
+            val response = URL("https://api.github.com/repos/dmulloy2/ProtocolLib/releases/latest").readText()
+
+            val versionMatch = "\"tag_name\"\\s*:\\s*\"([^\"]+)\"".toRegex().find(response)
+            val version = versionMatch?.groupValues?.get(1) ?: "unknown"
+
+            val platforms = mutableMapOf<String, String>()
+
+            val jarUrlMatch = "\"browser_download_url\"\\s*:\\s*\"([^\"]+\\.jar)\"".toRegex().find(response)
+            jarUrlMatch?.let {
+                val downloadUrl = it.groupValues[1]
+                if (pluginConfig.platforms.contains("bukkit")) {
+                    platforms["bukkit"] = downloadUrl
+                }
+            }
+
+            PluginInfo(
+                name = "ProtocolLib",
+                version = version,
+                platforms = platforms,
+                lastUpdated = System.currentTimeMillis().toString()
+            )
+        }
+
+    private suspend fun updatePlaceholderAPI(pluginConfig: AutoManagerConfig.PluginConfig): PluginInfo =
+        withContext(Dispatchers.IO) {
+            val response = URL("https://api.github.com/repos/PlaceholderAPI/PlaceholderAPI/releases/latest").readText()
+            val data = JsonLib.Companion.fromJsonString(response)!!
+
+            val version = data.getString("tag_name")!!
+            val assets = data.getAsJsonArray("assets")!!
+
+            val platforms = mutableMapOf<String, String>()
+
+            pluginConfig.platforms.forEach { platform ->
+                if (platform == "bukkit") {
+                    val asset = assets.find { asset ->
+                        val name = asset.getAsJsonObject().get("name").asString
+                        name.contains("PlaceholderAPI", true) && name.endsWith(".jar") && !name.contains("javadoc")
+                    }
+
+                    asset?.let {
+                        val downloadUrl = it.getAsJsonObject().get("browser_download_url").asString
+                        platforms[platform] = downloadUrl
+                    }
+                }
+            }
+
+            PluginInfo(
+                name = "PlaceholderAPI",
+                version = version,
+                platforms = platforms,
+                lastUpdated = System.currentTimeMillis().toString()
+            )
+        }
+
+    private suspend fun updateCustomPlugin(pluginConfig: AutoManagerConfig.PluginConfig): PluginInfo? =
+        withContext(Dispatchers.IO) {
+            val customUrl = pluginConfig.customUrl ?: return@withContext null
+
+            try {
+                val platforms = mutableMapOf<String, String>()
+
+                pluginConfig.platforms.forEach { platform ->
+                    platforms[platform] = customUrl
+                }
+
+                val version = extractVersionFromUrl(customUrl) ?: "custom-${System.currentTimeMillis()}"
+
+                PluginInfo(
+                    name = pluginConfig.name,
+                    version = version,
+                    platforms = platforms,
+                    lastUpdated = System.currentTimeMillis().toString()
+                )
+            } catch (e: Exception) {
+                null
+            }
+        }
+
+    private fun extractVersionFromUrl(url: String): String? {
+        val filename = url.substringAfterLast("/")
+        val versionRegex = Regex("""(\d+\.\d+(?:\.\d+)?(?:-[a-zA-Z0-9]+)?)""")
+        return versionRegex.find(filename)?.value
     }
 
     private suspend fun downloadPluginFiles(pluginName: String, pluginInfo: PluginInfo) = withContext(Dispatchers.IO) {
@@ -281,7 +441,7 @@ class PluginManager(private val config: AutoManagerConfig) {
 
                     val request = Request.Builder()
                         .url(url)
-                        .addHeader("User-Agent", "SimpleCloud-AutoUpdater")
+                        .addHeader("User-Agent", config.networking.userAgent)
                         .build()
 
                     val response = okHttpClient.newCall(request).execute()
@@ -292,20 +452,34 @@ class PluginManager(private val config: AutoManagerConfig) {
 
                     val responseBody = response.body ?: throw Exception("Empty response body")
 
-                    targetFile.writeBytes(responseBody.bytes())
+                    targetFile.outputStream().use { output ->
+                        responseBody.byteStream().use { input ->
+                            val buffer = ByteArray(config.performance.bufferSizeBytes)
+                            var bytesRead: Int
+                            var totalBytesRead = 0L
 
-                    if (targetFile.length() > MAX_FILE_SIZE) {
+                            while (input.read(buffer).also { bytesRead = it } != -1) {
+                                output.write(buffer, 0, bytesRead)
+                                totalBytesRead += bytesRead
+
+                                if (config.performance.enableProgressReporting && totalBytesRead % (1024 * 100) == 0L) {
+                                    LoggingUtils.debug(TAG, "Downloaded ${totalBytesRead / 1024} KB")
+                                }
+                            }
+                        }
+                    }
+
+                    if (targetFile.length() > config.performance.maxFileSizeBytes) {
                         targetFile.delete()
                         throw Exception("File too large: ${targetFile.length()} bytes")
                     }
 
-                    if (!isValidJarFile(targetFile)) {
+                    if (config.performance.enableChecksumValidation && !isValidJarFile(targetFile)) {
                         targetFile.delete()
                         throw Exception("Invalid JAR file")
                     }
 
-                    val fileSizeKB = targetFile.length() / 1024
-                    LoggingUtils.debug(TAG, "Successfully downloaded: $pluginName/$platform (${fileSizeKB} KB)")
+                    LoggingUtils.info(TAG, "Successfully downloaded: $pluginName/$platform (${targetFile.length() / 1024} KB)")
                 } else {
                     LoggingUtils.debug(TAG, "File already exists and is recent: ${targetFile.name}")
                 }
@@ -315,22 +489,15 @@ class PluginManager(private val config: AutoManagerConfig) {
                 throw e
             }
         }
-
-        LoggingUtils.debugSuccess(TAG, "downloading files for $pluginName")
     }
 
     private fun shouldDownloadFile(file: File, url: String): Boolean {
-        if (!file.exists()) {
-            LoggingUtils.debug(TAG, "File does not exist, download needed: ${file.name}")
-            return true
-        }
+        if (!file.exists()) return true
 
         val lastModified = file.lastModified()
         val hoursSinceModified = (System.currentTimeMillis() - lastModified) / (1000 * 60 * 60)
-        val shouldDownload = hoursSinceModified > UPDATE_INTERVAL_HOURS
 
-        LoggingUtils.debug(TAG, "File ${file.name} last modified ${hoursSinceModified}h ago, should download: $shouldDownload")
-        return shouldDownload
+        return hoursSinceModified > 24
     }
 
     private fun isValidJarFile(file: File): Boolean {
@@ -381,193 +548,29 @@ class PluginManager(private val config: AutoManagerConfig) {
     fun createPluginDirectoryStructure() {
         LoggingUtils.debugStart(TAG, "creating plugin directory structure")
 
-        var createdCount = 0
-        var existingCount = 0
-
-        config.plugins.forEach { pluginConfig ->
-            if (pluginConfig.enabled) {
-                val pluginDir = File(pluginsDirectory, pluginConfig.name)
-
-                pluginConfig.platforms.forEach { platform ->
-                    val platformDir = File(pluginDir, platform)
-                    if (!platformDir.exists()) {
-                        platformDir.mkdirs()
-                        LoggingUtils.debug(TAG, "Created directory: ${platformDir.absolutePath}")
-                        createdCount++
-                    } else {
-                        existingCount++
-                    }
+        config.plugins.filter { it.enabled }.forEach { pluginConfig ->
+            pluginConfig.platforms.forEach { platform ->
+                val platformDir = File(pluginsDirectory, "${pluginConfig.name}/$platform")
+                if (!platformDir.exists()) {
+                    platformDir.mkdirs()
+                    LoggingUtils.debug(TAG, "Created directory: ${platformDir.absolutePath}")
                 }
             }
         }
 
         LoggingUtils.debugSuccess(TAG, "creating plugin directory structure")
-        LoggingUtils.info(TAG, "Plugin directory structure creation completed ($createdCount created, $existingCount existing)")
     }
 
-    fun debugPluginStructure() {
-        LoggingUtils.debug(TAG, "=== DEBUG: Plugin Directory Structure ===")
-
-        if (!pluginsDirectory.exists()) {
-            LoggingUtils.debug(TAG, "Plugins directory does not exist: ${pluginsDirectory.absolutePath}")
-            return
-        }
-
-        try {
-            var totalPlugins = 0
-            var totalPlatforms = 0
-            var totalJarFiles = 0
-
-            pluginsDirectory.listFiles()?.forEach { file ->
-                if (file.isDirectory) {
-                    totalPlugins++
-                    LoggingUtils.debug(TAG, "Plugin directory: ${file.name}")
-
-                    file.listFiles()?.forEach { platformDir ->
-                        if (platformDir.isDirectory) {
-                            totalPlatforms++
-                            val jarCount = platformDir.listFiles()?.count { it.extension == "jar" } ?: 0
-                            totalJarFiles += jarCount
-
-                            LoggingUtils.debug(TAG, "  Platform: ${platformDir.name} ($jarCount JAR files)")
-
-                            if (config.enableDebug && jarCount > 0) {
-                                platformDir.listFiles()?.filter { it.extension == "jar" }?.forEach { jar ->
-                                    val sizeKB = jar.length() / 1024
-                                    val lastModified = Instant.ofEpochMilli(jar.lastModified())
-                                    LoggingUtils.debug(TAG, "    - ${jar.name} (${sizeKB}KB, modified: $lastModified)")
-                                }
-                            }
-                        } else {
-                            LoggingUtils.debug(TAG, "  File (should be in platform folder): ${platformDir.name}")
-                        }
-                    }
-                } else {
-                    LoggingUtils.debug(TAG, "File in plugins root (should be in platform folder): ${file.name}")
-                }
-            }
-
-            val summary = mapOf(
-                "total_plugin_directories" to totalPlugins,
-                "total_platform_directories" to totalPlatforms,
-                "total_jar_files" to totalJarFiles
-            )
-            LoggingUtils.debugStats(TAG, summary)
-
-        } catch (e: Exception) {
-            LoggingUtils.error(TAG, "Error debugging plugin structure: ${e.message}", e)
-        }
-
-        LoggingUtils.debug(TAG, "=== END DEBUG ===")
-    }
-
-    fun cleanupTemporaryFiles() {
-        LoggingUtils.debugStart(TAG, "cleaning up temporary files")
-
-        try {
-            var cleanedCount = 0
-            var cleanedSize = 0L
-
-            // Clean temp directory if enabled
-            if (config.performance.cleanupTempFiles) {
-                val tempDir = File(config.performance.tempDirectory)
-                if (tempDir.exists()) {
-                    tempDir.listFiles()?.forEach { file ->
-                        val size = file.length()
-                        if (file.deleteRecursively()) {
-                            cleanedCount++
-                            cleanedSize += size
-                            LoggingUtils.debug(TAG, "Cleaned temp file: ${file.name}")
-                        }
-                    }
-                }
-            }
-
-            // Clean .tmp files in plugins directory
-            cleanTmpFilesInDirectory(pluginsDirectory)?.let { (count, size) ->
-                cleanedCount += count
-                cleanedSize += size
-            }
-
-            // Clean old log files
-            cleanOldLogFiles()?.let { (count, size) ->
-                cleanedCount += count
-                cleanedSize += size
-            }
-
-            val stats = mapOf(
-                "files_cleaned" to cleanedCount,
-                "size_cleaned_mb" to cleanedSize / 1024 / 1024
-            )
-            LoggingUtils.debugStats(TAG, stats)
-
-            LoggingUtils.debugSuccess(TAG, "cleaning up temporary files")
-            LoggingUtils.info(TAG, "Cleaned $cleanedCount temporary files (${cleanedSize / 1024 / 1024}MB)")
-
-        } catch (e: Exception) {
-            LoggingUtils.error(TAG, "Error cleaning temporary files: ${e.message}", e)
+    fun getPluginInfo(pluginName: String): PluginInfo? {
+        val pluginConfig = config.plugins.find { it.name.equals(pluginName, ignoreCase = true) }
+        return if (pluginConfig != null) {
+            null
+        } else {
+            null
         }
     }
 
-    private fun cleanTmpFilesInDirectory(directory: File): Pair<Int, Long>? {
-        if (!directory.exists()) return null
-
-        var count = 0
-        var size = 0L
-
-        directory.listFiles()?.forEach { file ->
-            if (file.isDirectory) {
-                cleanTmpFilesInDirectory(file)?.let { (subCount, subSize) ->
-                    count += subCount
-                    size += subSize
-                }
-            } else if (file.name.endsWith(".tmp") || file.name.endsWith(".temp")) {
-                size += file.length()
-                if (file.delete()) {
-                    count++
-                    LoggingUtils.debug(TAG, "Cleaned temp file: ${file.relativeTo(pluginsDirectory)}")
-                }
-            }
-        }
-
-        return Pair(count, size)
+    fun getAllPluginInfo(): Map<String, PluginInfo> {
+        return emptyMap()
     }
-
-    private fun cleanOldLogFiles(): Pair<Int, Long>? {
-        if (!logsDirectory.exists()) return null
-
-        var count = 0
-        var size = 0L
-        val maxAge = 7 * 24 * 60 * 60 * 1000L // 7 days
-        val currentTime = System.currentTimeMillis()
-
-        logsDirectory.listFiles()?.forEach { file ->
-            if (file.isFile && file.name.startsWith("plugin-manager-")) {
-                val age = currentTime - file.lastModified()
-                if (age > maxAge) {
-                    size += file.length()
-                    if (file.delete()) {
-                        count++
-                        LoggingUtils.debug(TAG, "Cleaned old log file: ${file.name}")
-                    }
-                }
-            }
-        }
-
-        return Pair(count, size)
-    }
-
-    fun getStats(): Map<String, Any> {
-        val enabledPlugins = config.plugins.filter { it.enabled }
-        val downloadedPlugins = enabledPlugins.filter { isPluginAlreadyDownloaded(it) }
-
-        return mapOf(
-            "total_configured" to config.plugins.size,
-            "enabled" to enabledPlugins.size,
-            "downloaded" to downloadedPlugins.size,
-            "plugins_directory" to pluginsDirectory.absolutePath,
-            "update_interval_hours" to UPDATE_INTERVAL_HOURS
-        )
-    }
-
 }

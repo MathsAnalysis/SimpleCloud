@@ -7,7 +7,7 @@ import eu.thesimplecloud.launcher.startup.Launcher
 import eu.thesimplecloud.module.updater.api.UpdaterAPI
 import eu.thesimplecloud.module.updater.command.UpdaterCommand
 import eu.thesimplecloud.module.updater.config.AutoManagerConfig
-import eu.thesimplecloud.module.updater.plugin.PluginManager
+import eu.thesimplecloud.module.updater.manager.PluginManager
 import eu.thesimplecloud.module.updater.manager.ServerVersionManager
 import eu.thesimplecloud.module.updater.manager.ServiceVersionRegistrar
 import eu.thesimplecloud.module.updater.manager.TemplateManager
@@ -362,11 +362,12 @@ class PluginUpdaterModule : ICloudModule {
     }
 
     suspend fun forceUpdate(): Boolean {
-        LoggingUtils.info(TAG, "Force update requested")
+        println("[AutoManager] Force update requested")
 
         val lastUpdateFile = File(DirectoryPaths.paths.storagePath + "last_update.txt")
-        lastUpdateFile.parentFile.mkdirs()
-        lastUpdateFile.writeText(System.currentTimeMillis().toString())
+        if (lastUpdateFile.exists()) {
+            lastUpdateFile.delete()
+        }
 
         return performScheduledUpdate().let { true }
     }

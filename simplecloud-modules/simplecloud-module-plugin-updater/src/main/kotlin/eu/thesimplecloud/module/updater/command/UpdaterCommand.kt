@@ -1,5 +1,6 @@
 package eu.thesimplecloud.module.updater.command
 
+import eu.thesimplecloud.api.directorypaths.DirectoryPaths
 import eu.thesimplecloud.launcher.console.command.CommandType
 import eu.thesimplecloud.launcher.console.command.ICommandHandler
 import eu.thesimplecloud.launcher.console.command.annotations.Command
@@ -8,6 +9,7 @@ import eu.thesimplecloud.launcher.startup.Launcher
 import eu.thesimplecloud.module.updater.bootstrap.PluginUpdaterModule
 import eu.thesimplecloud.module.updater.utils.LoggingUtils
 import kotlinx.coroutines.runBlocking
+import java.io.File
 
 @Command("updater", CommandType.CONSOLE_AND_INGAME, "cloud.command.updater")
 class UpdaterCommand(private val module: PluginUpdaterModule) : ICommandHandler {
@@ -149,7 +151,11 @@ class UpdaterCommand(private val module: PluginUpdaterModule) : ICommandHandler 
 
             val moduleStats = module.getStats()
             val schedulerStats = module.getUpdateScheduler().getStats()
-            val pluginStats = module.getPluginManager().getStats()
+            val pluginStats = module.getPluginManager().getAllPluginInfo();
+
+            for (entry in pluginStats) {
+                LoggingUtils.debug(TAG, "Plugin: ${entry.key}, Info: ${entry.value}")
+            }
 
             sender.sendMessage("§7========== §bDetailed Status §7==========")
 
@@ -182,6 +188,27 @@ class UpdaterCommand(private val module: PluginUpdaterModule) : ICommandHandler 
         }
     }
 
+    @CommandSubPath("force-bypass", "Forces update bypassing timestamp check")
+    fun handleForceBypass() {
+        LoggingUtils.info(TAG, "Force bypass command executed")
+
+        val sender = Launcher.instance.consoleSender
+
+        try {
+            val lastUpdateFile = File(DirectoryPaths.paths.storagePath + "last_update.txt")
+            if (lastUpdateFile.exists()) {
+                lastUpdateFile.delete()
+                sender.sendMessage("§7Removed timestamp file...")
+            }
+
+            handleForceUpdate()
+
+        } catch (e: Exception) {
+            LoggingUtils.error(TAG, "Error executing force bypass: ${e.message}", e)
+            sender.sendMessage("§cError during force bypass: ${e.message}")
+        }
+    }
+
     @CommandSubPath("debug", "Toggles debug mode or shows debug information")
     fun handleDebug() {
         LoggingUtils.debug(TAG, "Debug command executed")
@@ -208,7 +235,9 @@ class UpdaterCommand(private val module: PluginUpdaterModule) : ICommandHandler 
 
                 sender.sendMessage("§7")
                 sender.sendMessage("§7Showing plugin directory structure in console...")
-                module.getPluginManager().debugPluginStructure()
+                module.getPluginManager().getAllPluginInfo().forEach { (name, info) ->
+                    LoggingUtils.debug(TAG, "Plugin: $name, Info: $info")
+                }
             } else {
                 sender.sendMessage("§7")
                 sender.sendMessage("§cDebug mode is disabled.")
@@ -236,6 +265,7 @@ class UpdaterCommand(private val module: PluginUpdaterModule) : ICommandHandler 
         sender.sendMessage("§e/updater status §7- Shows detailed status information")
         sender.sendMessage("§e/updater versions §7- Shows current server versions")
         sender.sendMessage("§e/updater force §7- Forces an immediate update")
+        sender.sendMessage("§e/updater force-bypass §7- Forces update bypassing timestamp")
         sender.sendMessage("§e/updater reload §7- Reloads the configuration")
         sender.sendMessage("§e/updater debug §7- Shows debug information")
         sender.sendMessage("§e/updater help §7- Shows this help message")

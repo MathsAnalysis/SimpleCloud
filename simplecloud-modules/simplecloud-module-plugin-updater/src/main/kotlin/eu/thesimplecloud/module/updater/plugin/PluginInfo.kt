@@ -1,13 +1,11 @@
 package eu.thesimplecloud.module.updater.plugin
 
 import com.fasterxml.jackson.annotation.JsonProperty
-import eu.thesimplecloud.jsonlib.JsonLib
-import java.time.Instant
-import java.time.LocalDateTime
-import java.time.ZoneId
-import java.time.format.DateTimeFormatter
+import java.text.SimpleDateFormat
+import java.util.*
 
 data class PluginInfo(
+
     @JsonProperty("name")
     val name: String,
 
@@ -29,18 +27,7 @@ data class PluginInfo(
     @JsonProperty("downloadedAt")
     val downloadedAt: Long? = null
 ) {
-
     companion object {
-        private val DATE_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
-
-        fun fromJson(jsonLib: JsonLib): PluginInfo? {
-            return try {
-                jsonLib.getObject(PluginInfo::class.java)
-            } catch (e: Exception) {
-                null
-            }
-        }
-
         fun create(
             name: String,
             version: String,
@@ -48,15 +35,14 @@ data class PluginInfo(
             checksum: String? = null,
             fileSize: Long? = null
         ): PluginInfo {
-            val now = System.currentTimeMillis()
             return PluginInfo(
                 name = name,
                 version = version,
                 platforms = platforms,
-                lastUpdated = now.toString(),
+                lastUpdated = System.currentTimeMillis().toString(),
                 checksum = checksum,
                 fileSize = fileSize,
-                downloadedAt = now
+                downloadedAt = null
             )
         }
     }
@@ -75,10 +61,6 @@ data class PluginInfo(
         """.trimIndent()
     }
 
-    fun toJsonLib(): JsonLib {
-        return JsonLib.fromObject(this)
-    }
-
     private fun platformsToJson(): String {
         val platformEntries = platforms.entries.joinToString(",") { (platform, url) ->
             "\"$platform\": \"$url\""
@@ -86,24 +68,11 @@ data class PluginInfo(
         return "{$platformEntries}"
     }
 
-    fun getUrlForPlatform(platform: String): String? {
-        return platforms[platform]
-    }
-
-    fun supportsPlatform(platform: String): Boolean {
-        return platforms.containsKey(platform)
-    }
-
-    fun getSupportedPlatforms(): Set<String> {
-        return platforms.keys
-    }
-
     fun getFormattedLastUpdated(): String {
         return try {
-            val timestamp = lastUpdated.toLongOrNull() ?: return lastUpdated
-            val instant = Instant.ofEpochMilli(timestamp)
-            val dateTime = LocalDateTime.ofInstant(instant, ZoneId.systemDefault())
-            dateTime.format(DATE_FORMATTER)
+            val timestamp = lastUpdated.toLong()
+            val date = Date(timestamp)
+            SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(date)
         } catch (e: Exception) {
             lastUpdated
         }
@@ -112,9 +81,8 @@ data class PluginInfo(
     fun getFormattedDownloadedAt(): String? {
         return downloadedAt?.let { timestamp ->
             try {
-                val instant = Instant.ofEpochMilli(timestamp)
-                val dateTime = LocalDateTime.ofInstant(instant, ZoneId.systemDefault())
-                dateTime.format(DATE_FORMATTER)
+                val date = Date(timestamp)
+                SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(date)
             } catch (e: Exception) {
                 timestamp.toString()
             }
@@ -124,19 +92,45 @@ data class PluginInfo(
     fun getFormattedFileSize(): String? {
         return fileSize?.let { size ->
             when {
-                size < 1024 -> "${size}B"
-                size < 1024 * 1024 -> "${size / 1024}KB"
-                size < 1024 * 1024 * 1024 -> "${size / (1024 * 1024)}MB"
-                else -> "${size / (1024 * 1024 * 1024)}GB"
+                size >= 1024 * 1024 -> "${size / (1024 * 1024)}MB"
+                size >= 1024 -> "${size / 1024}KB"
+                else -> "${size}B"
             }
         }
     }
 
-    fun isRecentlyDownloaded(withinHours: Int = 24): Boolean {
-        return downloadedAt?.let { timestamp ->
-            val hoursAgo = System.currentTimeMillis() - (withinHours * 60 * 60 * 1000)
-            timestamp > hoursAgo
-        } ?: false
+    fun hasBeenDownloaded(): Boolean {
+        return downloadedAt != null && downloadedAt > 0
+    }
+
+    fun isOutdated(maxAgeHours: Long = 24): Boolean {
+        val downloadTime = downloadedAt ?: return true
+        val ageHours = (System.currentTimeMillis() - downloadTime) / (1000 * 60 * 60)
+        return ageHours > maxAgeHours
+    }
+
+    fun needsUpdate(other: PluginInfo): Boolean {
+        return this.version != other.version ||
+                this.platforms != other.platforms ||
+                this.isOutdated()
+    }
+
+    fun isPlatformSupported(platform: String): Boolean {
+        return platforms.containsKey(platform)
+    }
+
+    fun getDownloadUrl(platform: String): String? {
+        return platforms[platform]
+    }
+
+    fun getAllSupportedPlatforms(): Set<String> {
+        return platforms.keys.toSet()
+    }
+
+    fun hasValidUrls(): Boolean {
+        return platforms.values.all { url ->
+            url.isNotBlank() && (url.startsWith("https://") || url.startsWith("https://"))
+        }
     }
 
     fun withUpdatedDownloadTime(): PluginInfo {

@@ -11,7 +11,6 @@ import java.security.MessageDigest
 import java.util.concurrent.TimeUnit
 
 
-//Not implemented for now, but can be used in the future
 class AutomaticJarUpdater(private val module: PluginUpdaterModule) {
     
     private val watchService = FileSystems.getDefault().newWatchService()

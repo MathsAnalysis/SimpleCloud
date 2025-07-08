@@ -584,14 +584,53 @@ class TemplateManager(
     }
 
     private fun determineTemplateType(templateDir: File): String {
-        return when {
-            File(templateDir, "velocity.toml").exists() -> "VELOCITY"
-            File(templateDir, "config.yml").exists() && File(templateDir, "plugins").exists() -> "BUNGEECORD"
-            File(templateDir, "server.properties").exists() -> "SPIGOT"
-            templateDir.name.contains("velocity", ignoreCase = true) -> "VELOCITY"
-            templateDir.name.contains("bungee", ignoreCase = true) -> "BUNGEECORD"
-            else -> "SPIGOT"
+        LoggingUtils.debug(TAG, "Determining type for template: ${templateDir.name}")
+
+        val type = when {
+            File(templateDir, "velocity.toml").exists() -> {
+                LoggingUtils.debug(TAG, "Template ${templateDir.name} identified as VELOCITY (velocity.toml found)")
+                "VELOCITY"
+            }
+            File(templateDir, "server.properties").exists() -> {
+                LoggingUtils.debug(TAG, "Template ${templateDir.name} identified as SPIGOT (server.properties found)")
+                "SPIGOT"
+            }
+
+            templateDir.name.contains("velocity", ignoreCase = true) ||
+                    templateDir.name.contains("proxy", ignoreCase = true) -> {
+                LoggingUtils.debug(TAG, "Template ${templateDir.name} identified as VELOCITY (name-based)")
+                "VELOCITY"
+            }
+            templateDir.name.contains("bungee", ignoreCase = true) -> {
+                LoggingUtils.debug(TAG, "Template ${templateDir.name} identified as BUNGEECORD (name-based)")
+                "BUNGEECORD"
+            }
+            templateDir.name.contains("server", ignoreCase = true) ||
+                    templateDir.name.contains("spigot", ignoreCase = true) ||
+                    templateDir.name.contains("paper", ignoreCase = true) -> {
+                LoggingUtils.debug(TAG, "Template ${templateDir.name} identified as SPIGOT (name-based)")
+                "SPIGOT"
+            }
+
+            File(templateDir, "config.yml").exists() && File(templateDir, "plugins").exists() &&
+                    !templateDir.name.contains("proxy", ignoreCase = true) -> {
+                LoggingUtils.debug(TAG, "Template ${templateDir.name} identified as BUNGEECORD (config.yml found)")
+                "BUNGEECORD"
+            }
+
+            else -> {
+                LoggingUtils.debug(TAG, "Template ${templateDir.name} using heuristic detection")
+                if (File(templateDir, "plugins").exists() && !File(templateDir, "server.properties").exists()) {
+                    LoggingUtils.debug(TAG, "Template ${templateDir.name} identified as VELOCITY (heuristic)")
+                    "VELOCITY"
+                } else {
+                    LoggingUtils.debug(TAG, "Template ${templateDir.name} identified as SPIGOT (default)")
+                    "SPIGOT"
+                }
+            }
         }
+
+        return type
     }
 
     private fun copyPluginsToTemplate(template: TemplateInfo, templatePluginsDir: File): Int {
@@ -607,15 +646,21 @@ class TemplateManager(
 
         val platform = when (template.type) {
             "VELOCITY" -> "velocity"
-            "BUNGEECORD" -> "bungee"
-            else -> "bukkit"
+            "BUNGEECORD" -> "bungeecord"
+            "SPIGOT" -> "bukkit"
+            else -> {
+                LoggingUtils.warn(TAG, "Unknown template type: ${template.type}, using bukkit as fallback")
+                "bukkit"
+            }
         }
 
-        LoggingUtils.debug(TAG, "Using platform: $platform for template ${template.name}")
+        LoggingUtils.debug(TAG, "Using platform: $platform for template ${template.name} (type: ${template.type})")
 
         config.plugins.filter { it.enabled }.forEach { pluginConfig ->
             if (platform in pluginConfig.platforms) {
                 try {
+                    LoggingUtils.debug(TAG, "Processing plugin ${pluginConfig.name} for platform $platform (supports: ${pluginConfig.platforms})")
+
                     val pluginSourceDir = File(pluginsSourceDir, "${pluginConfig.name}/$platform")
 
                     if (pluginSourceDir.exists()) {
@@ -631,15 +676,14 @@ class TemplateManager(
                         LoggingUtils.debug(TAG, "Plugin source directory not found: ${pluginSourceDir.absolutePath}")
                     }
                 } catch (e: Exception) {
-                    LoggingUtils.error(
-                        TAG,
-                        "Error copying plugin ${pluginConfig.name} to template ${template.name}: ${e.message}",
-                        e
-                    )
+                    LoggingUtils.error(TAG, "Error copying plugin ${pluginConfig.name} to template ${template.name}: ${e.message}", e)
                 }
+            } else {
+                LoggingUtils.debug(TAG, "Plugin ${pluginConfig.name} does not support platform $platform (supports: ${pluginConfig.platforms})")
             }
         }
 
+        LoggingUtils.debug(TAG, "Copied $copiedCount plugins to template ${template.name}")
         return copiedCount
     }
 
