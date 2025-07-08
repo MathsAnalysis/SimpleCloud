@@ -290,14 +290,12 @@ class PluginUpdaterModule : ICloudModule {
                 if (isServerTemplate) {
                     val serverJar = File(templateDir, "server.jar")
 
-                    // Backup del JAR esistente
                     if (serverJar.exists() && config.templates.enableTemplateBackup) {
                         val backupFile = File(templateDir, "server.jar.backup-${System.currentTimeMillis()}")
                         Files.copy(serverJar.toPath(), backupFile.toPath(), StandardCopyOption.REPLACE_EXISTING)
                         println("[AutoManager] Backup created: ${templateDir.name}/server.jar.backup")
                     }
 
-                    // Copia il nuovo JAR
                     Files.copy(newJar.toPath(), serverJar.toPath(), StandardCopyOption.REPLACE_EXISTING)
                     println("[AutoManager] Updated ${templateDir.name}/server.jar")
                 }
