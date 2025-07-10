@@ -9,6 +9,7 @@ import eu.thesimplecloud.launcher.startup.Launcher
 import eu.thesimplecloud.module.updater.api.UpdaterAPI
 import eu.thesimplecloud.module.updater.command.UpdaterCommand
 import eu.thesimplecloud.module.updater.config.AutoManagerConfig
+import eu.thesimplecloud.module.updater.docker.DockerJarUpdater
 import eu.thesimplecloud.module.updater.manager.PluginManager
 import eu.thesimplecloud.module.updater.manager.ServerVersionManager
 import eu.thesimplecloud.module.updater.manager.ServiceVersionRegistrar
@@ -49,6 +50,7 @@ class PluginUpdaterModule : ICloudModule {
     private lateinit var updaterAPI: UpdaterAPI
     private lateinit var serviceVersionRegistrar: ServiceVersionRegistrar
     private lateinit var automaticJarUpdater: AutomaticJarUpdater
+    private lateinit var dockerJarUpdater: DockerJarUpdater
 
     private val moduleScope = CoroutineScope(Dispatchers.IO)
     private val updatedTemplates = mutableSetOf<String>()
@@ -146,7 +148,12 @@ class PluginUpdaterModule : ICloudModule {
 
     private fun startAutomaticJarUpdater() {
         try {
+            automaticJarUpdater = AutomaticJarUpdater(this)
             automaticJarUpdater.startAutomaticMonitoring()
+
+            dockerJarUpdater = DockerJarUpdater()
+            dockerJarUpdater.startDockerMonitoring()
+
             LoggingUtils.info(TAG, "AutomaticJarUpdater started successfully")
         } catch (e: Exception) {
             LoggingUtils.error(TAG, "Error starting AutomaticJarUpdater: ${e.message}", e)

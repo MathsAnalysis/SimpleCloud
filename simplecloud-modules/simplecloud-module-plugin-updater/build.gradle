@@ -17,4 +17,6 @@ dependencies {
     }
 
     implementation 'org.json:json:20250517'
+
+    implementation 'com.github.docker-java:docker-java:3.5.3'
 }

@@ -1,12 +1,15 @@
 package eu.thesimplecloud.module.updater.updater
 
 import eu.thesimplecloud.api.directorypaths.DirectoryPaths
+import eu.thesimplecloud.jsonlib.JsonLib
 import eu.thesimplecloud.module.updater.bootstrap.PluginUpdaterModule
 import kotlinx.coroutines.*
 import kotlinx.coroutines.sync.Semaphore
+import okhttp3.OkHttpClient
+import okhttp3.Request
 import java.io.File
-import java.net.URL
 import java.nio.file.*
+import java.security.MessageDigest
 import java.util.concurrent.TimeUnit
 
 class AutomaticJarUpdater(private val module: PluginUpdaterModule) {
@@ -14,13 +17,31 @@ class AutomaticJarUpdater(private val module: PluginUpdaterModule) {
     private val watchService = FileSystems.getDefault().newWatchService()
     private val checksumFile = File(DirectoryPaths.paths.storagePath + "jar_checksums.json")
     private val lockFile = File(DirectoryPaths.paths.storagePath + "jar_update.lock")
+    private val lastUpdateFile = File(DirectoryPaths.paths.storagePath + "last_jar_update.txt")
+    private val minecraftJarsPath = File(DirectoryPaths.paths.minecraftJarsPath)
+    private val templatesPath = File(DirectoryPaths.paths.templatesPath)
+
+    private val okHttpClient = OkHttpClient.Builder()
+        .connectTimeout(30, TimeUnit.SECONDS)
+        .readTimeout(60, TimeUnit.SECONDS)
+        .build()
+
+    private val updateSemaphore = Semaphore(1)
+    private val downloadSemaphore = Semaphore(2)
 
     private val isLinux = !System.getProperty("os.name").lowercase().contains("windows")
     private val useSystemd = isLinux && File("/bin/systemctl").exists()
-    private val useDocker = isLinux && File("/.dockerenv").exists()
 
     fun startAutomaticMonitoring() {
-        if (!module.getConfig().enableAutomation) return
+        if (!module.getConfig().enableAutomation) {
+            println("[AutoJarUpdater] Automation disabled, skipping monitoring")
+            return
+        }
+
+        println("[AutoJarUpdater] Starting automatic JAR monitoring and updates")
+
+        minecraftJarsPath.mkdirs()
+        templatesPath.mkdirs()
 
         GlobalScope.launch {
             try {
@@ -28,15 +49,16 @@ class AutomaticJarUpdater(private val module: PluginUpdaterModule) {
                 startPeriodicChecks()
             } catch (e: Exception) {
                 println("[AutoJarUpdater] Error starting monitoring: ${e.message}")
+                e.printStackTrace()
             }
         }
     }
 
     private suspend fun setupFileWatching() = withContext(Dispatchers.IO) {
-        val minecraftJarsPath = Paths.get(DirectoryPaths.paths.minecraftJarsPath)
-        val templatesPath = Paths.get(DirectoryPaths.paths.templatesPath)
+        val minecraftJarsWatchPath = Paths.get(minecraftJarsPath.absolutePath)
+        val templatesWatchPath = Paths.get(templatesPath.absolutePath)
 
-        listOf(minecraftJarsPath, templatesPath).forEach { path ->
+        listOf(minecraftJarsWatchPath, templatesWatchPath).forEach { path ->
             if (Files.exists(path)) {
                 path.register(
                     watchService,
@@ -68,6 +90,7 @@ class AutomaticJarUpdater(private val module: PluginUpdaterModule) {
         when (eventKind) {
             StandardWatchEventKinds.ENTRY_CREATE -> {
                 println("[AutoJarUpdater] New JAR detected: $fileName")
+                validateJarIntegrity(fileName)
                 updateChecksums()
             }
             StandardWatchEventKinds.ENTRY_MODIFY -> {
@@ -82,532 +105,290 @@ class AutomaticJarUpdater(private val module: PluginUpdaterModule) {
     }
 
     private suspend fun startPeriodicChecks() {
-        val config = module.getConfig()
-        val updateInterval = parseUpdateInterval(config.updateInterval)
+        val updateInterval = TimeUnit.HOURS.toMillis(1)
 
         while (true) {
             try {
                 if (shouldPerformUpdate()) {
-                    performSmartUpdate()
+                    println("[AutoJarUpdater] Starting hourly forced update cycle")
+                    performForcedUpdate()
                 }
 
                 delay(updateInterval)
             } catch (e: Exception) {
                 println("[AutoJarUpdater] Error in periodic check: ${e.message}")
-                delay(60000)
+                e.printStackTrace()
+                delay(TimeUnit.MINUTES.toMillis(5))
             }
         }
     }
 
-    suspend fun performSmartUpdate() = withContext(Dispatchers.IO) {
-        if (!acquireUpdateLock()) {
-            println("[AutoJarUpdater] Update already in progress, skipping...")
-            return@withContext
+    private suspend fun performForcedUpdate() {
+        if (!updateSemaphore.tryAcquire()) {
+            println("[AutoJarUpdater] Update already in progress, skipping")
+            return
         }
 
         try {
-            val systemLoad = getSystemLoad()
-
-            if (systemLoad > 0.8) {
-                println("[AutoJarUpdater] System load too high ($systemLoad), postponing update...")
-                return@withContext
-            }
-
-            println("[AutoJarUpdater] Starting smart update (load: $systemLoad)...")
-
-            val semaphore = Semaphore(3)
-
-            listOf(
-                async { updateLeafJars(semaphore) },
-                async { updateVelocityCTDJars(semaphore) },
-                async { updateVelocityJars(semaphore) },
-                async { updatePaperJars(semaphore) },
-                async { updatePlugins(semaphore) }
-            ).awaitAll()
-
-            verifyAllJarsIntegrity()
-
-            sendSystemNotification("JAR update completed successfully")
-
-        } finally {
-            releaseUpdateLock()
-        }
-    }
-
-    private suspend fun updateLeafJars(semaphore: Semaphore) = withContext(Dispatchers.IO) {
-        semaphore.acquire()
-        try {
-            println("[AutoJarUpdater] Starting Leaf JAR update...")
-
-            val serverVersionManager = module.getServerVersionManager()
-            val leafEntry = serverVersionManager.getCurrentVersions()
-                .find { it.name == "Leaf" } ?: return@withContext
-
-            if (leafEntry.downloadLinks.isEmpty()) {
-                println("[AutoJarUpdater] No Leaf versions available")
-                return@withContext
-            }
-
-            val latestDownload = leafEntry.downloadLinks.first()
-            val targetFile = File(DirectoryPaths.paths.minecraftJarsPath,
-                "LEAF_${sanitizeVersion(latestDownload.version)}.jar")
-
-            if (targetFile.exists()) {
-                println("[AutoJarUpdater] Leaf ${latestDownload.version} already exists")
-                updateTemplateJar("server.jar", targetFile, "SERVER")
-                return@withContext
-            }
-
-            val sourceFile = findLeafJarInVersionsDirectory(latestDownload.version)
-            if (sourceFile != null && sourceFile.exists()) {
-                println("[AutoJarUpdater] Copying existing Leaf ${latestDownload.version} to MinecraftJars...")
-                Files.copy(sourceFile.toPath(), targetFile.toPath(), StandardCopyOption.REPLACE_EXISTING)
-                println("[AutoJarUpdater] Leaf updated to ${latestDownload.version}")
-
-                updateTemplateJar("server.jar", targetFile, "SERVER")
-                cleanupOldLeafJars(targetFile)
-            } else {
-                println("[AutoJarUpdater] Leaf JAR not found in versions directory, downloading...")
-                downloadLeafJar(latestDownload, targetFile)
-            }
-
-        } catch (e: Exception) {
-            println("[AutoJarUpdater] Error updating Leaf JAR: ${e.message}")
-            e.printStackTrace()
-        } finally {
-            semaphore.release()
-        }
-    }
-
-    private suspend fun updateVelocityCTDJars(semaphore: Semaphore) = withContext(Dispatchers.IO) {
-        semaphore.acquire()
-        try {
-            println("[AutoJarUpdater] Starting VelocityCTD JAR update...")
-
-            val serverVersionManager = module.getServerVersionManager()
-            val velocityCTDEntry = serverVersionManager.getCurrentVersions()
-                .find { it.name == "VelocityCTD" } ?: return@withContext
-
-            if (velocityCTDEntry.downloadLinks.isEmpty()) {
-                println("[AutoJarUpdater] No VelocityCTD versions available")
-                return@withContext
-            }
-
-            val latestDownload = velocityCTDEntry.downloadLinks.first()
-            val targetFile = File(DirectoryPaths.paths.minecraftJarsPath,
-                "VELOCITYCTD_${sanitizeVersion(latestDownload.version)}.jar")
-
-            if (targetFile.exists()) {
-                println("[AutoJarUpdater] VelocityCTD ${latestDownload.version} already exists")
-                updateTemplateJar("velocity.jar", targetFile, "PROXY")
-                return@withContext
-            }
-
-            val sourceFile = findVelocityCTDJarInVersionsDirectory(latestDownload.version)
-            if (sourceFile != null && sourceFile.exists()) {
-                println("[AutoJarUpdater] Copying existing VelocityCTD ${latestDownload.version} to MinecraftJars...")
-                Files.copy(sourceFile.toPath(), targetFile.toPath(), StandardCopyOption.REPLACE_EXISTING)
-                println("[AutoJarUpdater] VelocityCTD updated to ${latestDownload.version}")
-
-                updateTemplateJar("velocity.jar", targetFile, "PROXY")
-                cleanupOldVelocityCTDJars(targetFile)
-            } else {
-                println("[AutoJarUpdater] VelocityCTD JAR not found in versions directory, downloading...")
-                downloadVelocityCTDJar(latestDownload, targetFile)
-            }
-
-        } catch (e: Exception) {
-            println("[AutoJarUpdater] Error updating VelocityCTD JAR: ${e.message}")
-            e.printStackTrace()
-        } finally {
-            semaphore.release()
-        }
-    }
-
-    private suspend fun updateVelocityJars(semaphore: Semaphore) = withContext(Dispatchers.IO) {
-        semaphore.acquire()
-        try {
-            val serverVersionManager = module.getServerVersionManager()
-            val velocityEntry = serverVersionManager.getCurrentVersions()
-                .find { it.name == "Velocity" } ?: return@withContext
-
-            if (velocityEntry.downloadLinks.isEmpty()) return@withContext
-
-            val latestDownload = velocityEntry.downloadLinks.first()
-            val targetFile = File(DirectoryPaths.paths.minecraftJarsPath,
-                "VELOCITY_${sanitizeVersion(latestDownload.version)}.jar")
-
-            val tempFile = File(targetFile.parentFile, "${targetFile.name}.tmp")
-
-            try {
-                downloadWithProgress(latestDownload.link, tempFile, "Velocity ${latestDownload.version}")
-
-                if (verifyJarIntegrity(tempFile)) {
-                    Files.move(tempFile.toPath(), targetFile.toPath(), StandardCopyOption.REPLACE_EXISTING)
-                    println("[AutoJarUpdater] Velocity updated to ${latestDownload.version}")
-
-                    updateTemplateJar("velocity.jar", targetFile, "PROXY")
-
-                } else {
-                    println("[AutoJarUpdater] Velocity download failed checksum validation")
-                    tempFile.delete()
-                }
-
-            } catch (e: Exception) {
-                println("[AutoJarUpdater] Error updating Velocity: ${e.message}")
-                tempFile.delete()
-            }
-
-        } finally {
-            semaphore.release()
-        }
-    }
-
-    private suspend fun updatePaperJars(semaphore: Semaphore) = withContext(Dispatchers.IO) {
-        semaphore.acquire()
-        try {
-            println("[AutoJarUpdater] Starting Paper JAR update...")
-
-            val serverVersionManager = module.getServerVersionManager()
-            val paperEntry = serverVersionManager.getCurrentVersions()
-                .find { it.name == "Paper" } ?: return@withContext
-
-            if (paperEntry.downloadLinks.isEmpty()) {
-                println("[AutoJarUpdater] No Paper versions available")
-                return@withContext
-            }
-
-            val latestDownload = paperEntry.downloadLinks.first()
-            val targetFile = File(DirectoryPaths.paths.minecraftJarsPath,
-                "PAPER_${sanitizeVersion(latestDownload.version)}.jar")
-
-            if (targetFile.exists()) {
-                println("[AutoJarUpdater] Paper ${latestDownload.version} already exists")
-                updateTemplateJar("server.jar", targetFile, "SERVER")
-                return@withContext
-            }
-
-            val sourceFile = findPaperJarInVersionsDirectory(latestDownload.version)
-            if (sourceFile != null && sourceFile.exists()) {
-                println("[AutoJarUpdater] Copying existing Paper ${latestDownload.version} to MinecraftJars...")
-                Files.copy(sourceFile.toPath(), targetFile.toPath(), StandardCopyOption.REPLACE_EXISTING)
-                println("[AutoJarUpdater] Paper updated to ${latestDownload.version}")
-
-                updateTemplateJar("server.jar", targetFile, "SERVER")
-                cleanupOldPaperJars(targetFile)
-            } else {
-                println("[AutoJarUpdater] Paper JAR not found in versions directory")
-            }
-
-        } catch (e: Exception) {
-            println("[AutoJarUpdater] Error updating Paper JAR: ${e.message}")
-            e.printStackTrace()
-        } finally {
-            semaphore.release()
-        }
-    }
-
-    private suspend fun updatePlugins(semaphore: Semaphore) = GlobalScope.async {
-        println("[AutoJarUpdater] Plugin updates completed")
-    }
-
-    private suspend fun downloadWithProgress(url: String, targetFile: File, description: String) = withContext(Dispatchers.IO) {
-        var attempts = 0
-        val maxAttempts = 3
-
-        while (true) {
-            try {
-                attempts++
-
-                val connection = URL(url).openConnection()
-                connection.connectTimeout = 30000
-                connection.readTimeout = 60000
-                connection.setRequestProperty("User-Agent", "SimpleCloud-AutoUpdater/1.0")
-
-                val inputStream = connection.getInputStream()
-                val outputStream = targetFile.outputStream()
-
-                val buffer = ByteArray(8192)
-                var bytesRead: Int
-                var totalBytes = 0L
-
-                while (inputStream.read(buffer).also { bytesRead = it } != -1) {
-                    outputStream.write(buffer, 0, bytesRead)
-                    totalBytes += bytesRead
-                }
-
-                outputStream.close()
-                inputStream.close()
-
-                println("[AutoJarUpdater] Downloaded $description successfully ($totalBytes bytes)")
-                break
-
-            } catch (e: Exception) {
-                println("[AutoJarUpdater] Download attempt $attempts failed: ${e.message}")
-                if (attempts >= maxAttempts) {
-                    throw e
-                }
-                delay(5000)
-            }
-        }
-    }
-
-    private fun updateTemplateJar(jarName: String, sourceFile: File, serviceType: String) {
-        try {
-            println("[AutoJarUpdater] Updating templates with new $jarName...")
-
-            val templatesDir = File(DirectoryPaths.paths.templatesPath)
-            if (!templatesDir.exists()) {
-                println("[AutoJarUpdater] Templates directory does not exist")
+            if (!acquireUpdateLock()) {
+                println("[AutoJarUpdater] Could not acquire update lock")
                 return
             }
 
-            val config = module.getConfig()
-            var updatedCount = 0
+            println("[AutoJarUpdater] === STARTING FORCED HOURLY UPDATE ===")
 
-            templatesDir.listFiles()?.forEach { templateDir ->
-                if (templateDir.isDirectory) {
-                    try {
-                        val templateType = determineTemplateType(templateDir)
+            cleanupOldJars()
 
-                        if ((serviceType == "SERVER" && templateType == "SERVER") ||
-                            (serviceType == "PROXY" && templateType == "PROXY")) {
+            downloadLatestJars()
 
-                            val targetJar = File(templateDir, jarName)
+            updateAllTemplates()
 
-                            if (config.templates.enableTemplateBackup && targetJar.exists()) {
-                                val backupDir = File(templateDir, "backups")
-                                backupDir.mkdirs()
-                                val timestamp = System.currentTimeMillis()
-                                val backupFile = File(backupDir, "${targetJar.name}.backup-${timestamp}")
-                                Files.copy(targetJar.toPath(), backupFile.toPath(), StandardCopyOption.REPLACE_EXISTING)
-                                println("[AutoJarUpdater] Created backup: ${backupFile.name}")
-                            }
+            verifyAllJarsIntegrity()
 
-                            Files.copy(sourceFile.toPath(), targetJar.toPath(), StandardCopyOption.REPLACE_EXISTING)
-                            updatedCount++
-                            println("[AutoJarUpdater] Updated ${templateDir.name}/$jarName")
+            updateChecksums()
+
+            lastUpdateFile.writeText(System.currentTimeMillis().toString())
+
+            println("[AutoJarUpdater] === FORCED HOURLY UPDATE COMPLETED ===")
+            sendSystemNotification("JAR update completed successfully")
+
+        } catch (e: Exception) {
+            println("[AutoJarUpdater] Error during forced update: ${e.message}")
+            e.printStackTrace()
+            sendSystemNotification("JAR update failed: ${e.message}")
+        } finally {
+            releaseUpdateLock()
+            updateSemaphore.release()
+        }
+    }
+
+    private fun cleanupOldJars() {
+        println("[AutoJarUpdater] Cleaning up old JAR files")
+
+        minecraftJarsPath.listFiles()?.forEach { file ->
+            if (file.isFile && file.name.endsWith(".jar")) {
+                println("[AutoJarUpdater] Deleting old JAR: ${file.name}")
+                file.delete()
+            }
+        }
+
+        templatesPath.listFiles()?.forEach { templateDir ->
+            if (templateDir.isDirectory) {
+                templateDir.listFiles()?.forEach { file ->
+                    if (file.isFile && file.name.endsWith(".jar")) {
+                        val age = System.currentTimeMillis() - file.lastModified()
+                        if (age > TimeUnit.HOURS.toMillis(2)) {
+                            println("[AutoJarUpdater] Deleting old template JAR: ${templateDir.name}/${file.name}")
+                            file.delete()
                         }
-                    } catch (e: Exception) {
-                        println("[AutoJarUpdater] Error updating template ${templateDir.name}: ${e.message}")
                     }
                 }
             }
-
-            println("[AutoJarUpdater] Updated $updatedCount templates with new $jarName")
-
-        } catch (e: Exception) {
-            println("[AutoJarUpdater] Error in updateTemplateJar: ${e.message}")
-            e.printStackTrace()
         }
     }
 
-    private fun determineTemplateType(templateDir: File): String {
-        val proxyFiles = listOf("velocity.toml", "config.yml", "waterfall.yml", "bungee.yml")
-        val serverFiles = listOf("server.properties", "spigot.yml", "bukkit.yml", "paper.yml")
+    private suspend fun downloadLatestJars() {
+        println("[AutoJarUpdater] Downloading latest JAR versions")
 
-        val hasProxyFiles = proxyFiles.any { File(templateDir, it).exists() }
-        val hasServerFiles = serverFiles.any { File(templateDir, it).exists() }
+        val versions = module.getServerVersionManager().getCurrentVersions()
 
-        return when {
-            hasProxyFiles -> "PROXY"
-            hasServerFiles -> "SERVER"
-            templateDir.name.lowercase().contains("proxy") -> "PROXY"
-            templateDir.name.lowercase().contains("velocity") -> "PROXY"
-            templateDir.name.lowercase().contains("bungee") -> "PROXY"
-            else -> "SERVER"
-        }
-    }
+        versions.forEach { serverVersion ->
+            serverVersion.downloadLinks.forEach { downloadLink ->
+                try {
+                    downloadSemaphore.acquire()
 
-    private fun findLeafJarInVersionsDirectory(version: String): File? {
-        val versionsDir = File(DirectoryPaths.paths.storagePath + "server-versions/leaf/")
-        if (!versionsDir.exists()) return null
+                    val jarName = when (serverVersion.name.lowercase()) {
+                        "leaf" -> "LEAF_${sanitizeVersion(downloadLink.version)}.jar"
+                        "paper" -> "PAPER_${sanitizeVersion(downloadLink.version)}.jar"
+                        "velocity" -> "VELOCITY_${sanitizeVersion(downloadLink.version)}.jar"
+                        "velocityctd" -> "VELOCITYCTD_${sanitizeVersion(downloadLink.version)}.jar"
+                        else -> "${serverVersion.name.uppercase()}_${sanitizeVersion(downloadLink.version)}.jar"
+                    }
 
-        return versionsDir.listFiles()?.find { file ->
-            file.name.endsWith(".jar") && (
-                    file.name.contains(version) ||
-                            file.name.contains("leaf-er-${version}") ||
-                            file.name.startsWith("leaf-") && file.name.contains(version.replace("-", "."))
-                    )
-        }
-    }
+                    val targetFile = File(minecraftJarsPath, jarName)
 
-    private fun findVelocityCTDJarInVersionsDirectory(version: String): File? {
-        val versionsDir = File(DirectoryPaths.paths.storagePath + "server-versions/velocityctd/")
-        if (!versionsDir.exists()) return null
+                    if (downloadJar(downloadLink.link, targetFile)) {
+                        println("[AutoJarUpdater] Downloaded: $jarName (${targetFile.length() / 1024}KB)")
+                    } else {
+                        println("[AutoJarUpdater] Failed to download: $jarName")
+                    }
 
-        return versionsDir.listFiles()?.find { file ->
-            file.name.endsWith(".jar") && file.name.contains(version)
-        }
-    }
-
-    private fun findPaperJarInVersionsDirectory(version: String): File? {
-        val versionsDir = File(DirectoryPaths.paths.storagePath + "server-versions/paper/")
-        if (!versionsDir.exists()) return null
-
-        return versionsDir.listFiles()?.find { file ->
-            file.name.endsWith(".jar") && file.name.contains(version)
-        }
-    }
-
-    private suspend fun downloadLeafJar(download: Any, targetFile: File) = withContext(Dispatchers.IO) {
-        try {
-            println("[AutoJarUpdater] Leaf download functionality not implemented")
-        } catch (e: Exception) {
-            println("[AutoJarUpdater] Error downloading Leaf: ${e.message}")
-            targetFile.delete()
-        }
-    }
-
-    private suspend fun downloadVelocityCTDJar(download: Any, targetFile: File) = withContext(Dispatchers.IO) {
-        try {
-            println("[AutoJarUpdater] VelocityCTD download functionality not implemented")
-        } catch (e: Exception) {
-            println("[AutoJarUpdater] Error downloading VelocityCTD: ${e.message}")
-            targetFile.delete()
-        }
-    }
-
-    private fun cleanupOldLeafJars(currentFile: File) {
-        try {
-            val minecraftJarsDir = File(DirectoryPaths.paths.minecraftJarsPath)
-            val config = module.getConfig()
-
-            if (!config.serverVersions.keepOldVersions) return
-
-            val leafJars = minecraftJarsDir.listFiles()?.filter {
-                it.name.startsWith("LEAF_") && it.name.endsWith(".jar") && it != currentFile
-            }?.sortedByDescending { it.lastModified() } ?: return
-
-            val maxVersions = config.serverVersions.preserveLatestVersions
-            if (leafJars.size > maxVersions) {
-                leafJars.drop(maxVersions).forEach { oldJar ->
-                    println("[AutoJarUpdater] Deleting old Leaf JAR: ${oldJar.name}")
-                    oldJar.delete()
+                } catch (e: Exception) {
+                    println("[AutoJarUpdater] Error downloading ${serverVersion.name}: ${e.message}")
+                } finally {
+                    downloadSemaphore.release()
                 }
             }
-        } catch (e: Exception) {
-            println("[AutoJarUpdater] Error cleaning up old Leaf JARs: ${e.message}")
         }
     }
 
-    private fun cleanupOldVelocityCTDJars(currentFile: File) {
+    private suspend fun downloadJar(url: String, targetFile: File): Boolean = withContext(Dispatchers.IO) {
         try {
-            val minecraftJarsDir = File(DirectoryPaths.paths.minecraftJarsPath)
-            val config = module.getConfig()
+            val request = Request.Builder()
+                .url(url)
+                .addHeader("User-Agent", "SimpleCloud-AutoUpdater/1.0")
+                .build()
 
-            if (!config.serverVersions.keepOldVersions) return
+            val response = okHttpClient.newCall(request).execute()
 
-            val velocityJars = minecraftJarsDir.listFiles()?.filter {
-                it.name.startsWith("VELOCITYCTD_") && it.name.endsWith(".jar") && it != currentFile
-            }?.sortedByDescending { it.lastModified() } ?: return
-
-            val maxVersions = config.serverVersions.preserveLatestVersions
-            if (velocityJars.size > maxVersions) {
-                velocityJars.drop(maxVersions).forEach { oldJar ->
-                    println("[AutoJarUpdater] Deleting old VelocityCTD JAR: ${oldJar.name}")
-                    oldJar.delete()
+            if (response.isSuccessful) {
+                response.body?.use { body ->
+                    targetFile.writeBytes(body.bytes())
                 }
-            }
-        } catch (e: Exception) {
-            println("[AutoJarUpdater] Error cleaning up old VelocityCTD JARs: ${e.message}")
-        }
-    }
-
-    private fun cleanupOldPaperJars(currentFile: File) {
-        try {
-            val minecraftJarsDir = File(DirectoryPaths.paths.minecraftJarsPath)
-            val config = module.getConfig()
-
-            if (!config.serverVersions.keepOldVersions) return
-
-            val paperJars = minecraftJarsDir.listFiles()?.filter {
-                it.name.startsWith("PAPER_") && it.name.endsWith(".jar") && it != currentFile
-            }?.sortedByDescending { it.lastModified() } ?: return
-
-            val maxVersions = config.serverVersions.preserveLatestVersions
-            if (paperJars.size > maxVersions) {
-                paperJars.drop(maxVersions).forEach { oldJar ->
-                    println("[AutoJarUpdater] Deleting old Paper JAR: ${oldJar.name}")
-                    oldJar.delete()
-                }
-            }
-        } catch (e: Exception) {
-            println("[AutoJarUpdater] Error cleaning up old Paper JARs: ${e.message}")
-        }
-    }
-
-    private fun verifyJarIntegrity(file: File): Boolean {
-        return try {
-            if (!file.exists() || file.length() < 1024) {
-                false
+                true
             } else {
-                val bytes = file.readBytes()
-                bytes.size >= 4 &&
-                        bytes[0] == 0x50.toByte() &&
-                        bytes[1] == 0x4B.toByte() &&
-                        (bytes[2] == 0x03.toByte() || bytes[2] == 0x05.toByte() || bytes[2] == 0x07.toByte()) &&
-                        (bytes[3] == 0x04.toByte() || bytes[3] == 0x06.toByte() || bytes[3] == 0x08.toByte())
+                println("[AutoJarUpdater] HTTP ${response.code} for $url")
+                false
             }
         } catch (e: Exception) {
-            println("[AutoJarUpdater] Error verifying JAR integrity: ${e.message}")
+            println("[AutoJarUpdater] Download error for $url: ${e.message}")
             false
         }
     }
 
-    private fun verifyAllJarsIntegrity() {
-        try {
-            val minecraftJarsDir = File(DirectoryPaths.paths.minecraftJarsPath)
-            if (!minecraftJarsDir.exists()) return
+    private fun updateAllTemplates() {
+        println("[AutoJarUpdater] Updating all templates with new JAR files")
 
-            minecraftJarsDir.listFiles()?.filter { it.name.endsWith(".jar") }?.forEach { jarFile ->
-                if (!verifyJarIntegrity(jarFile)) {
-                    println("[AutoJarUpdater] Invalid JAR detected: ${jarFile.name}")
+        templatesPath.listFiles()?.forEach { templateDir ->
+            if (templateDir.isDirectory) {
+                updateTemplateJars(templateDir)
+            }
+        }
+    }
+
+    private fun updateTemplateJars(templateDir: File) {
+        val templateName = templateDir.name
+        println("[AutoJarUpdater] Updating template: $templateName")
+
+        val serverType = determineServerType(templateName)
+
+        if (serverType != null) {
+            val sourceJar = findLatestJarForType(serverType)
+
+            if (sourceJar != null && sourceJar.exists()) {
+                val targetFile = File(templateDir, sourceJar.name)
+                try {
+                    sourceJar.copyTo(targetFile, overwrite = true)
+                    println("[AutoJarUpdater] Updated template $templateName with ${sourceJar.name}")
+                } catch (e: Exception) {
+                    println("[AutoJarUpdater] Error updating template $templateName: ${e.message}")
                 }
             }
-        } catch (e: Exception) {
-            println("[AutoJarUpdater] Error verifying JAR integrity: ${e.message}")
         }
     }
 
-    private fun updateChecksums() {
-        try {
-            println("[AutoJarUpdater] Checksum update completed")
-        } catch (e: Exception) {
-            println("[AutoJarUpdater] Error updating checksums: ${e.message}")
-        }
-    }
-
-    private fun validateJarIntegrity(fileName: String) {
-        try {
-            val jarFile = File(DirectoryPaths.paths.minecraftJarsPath, fileName)
-            if (jarFile.exists()) {
-                val isValid = verifyJarIntegrity(jarFile)
-                println("[AutoJarUpdater] JAR $fileName integrity: ${if (isValid) "VALID" else "INVALID"}")
+    private fun determineServerType(templateName: String): String? {
+        val groupFile = File(DirectoryPaths.paths.storagePath + "groups/$templateName.json")
+        if (groupFile.exists()) {
+            try {
+                val groupData = JsonLib.fromJsonFile(groupFile)
+                val serviceVersion = groupData?.getString("serviceVersion")
+                return when {
+                    serviceVersion?.startsWith("LEAF_") == true -> "LEAF"
+                    serviceVersion?.startsWith("PAPER_") == true -> "PAPER"
+                    serviceVersion?.startsWith("VELOCITY_") == true -> "VELOCITY"
+                    serviceVersion?.startsWith("VELOCITYCTD_") == true -> "VELOCITYCTD"
+                    else -> null
+                }
+            } catch (e: Exception) {
+                println("[AutoJarUpdater] Error reading group config for $templateName: ${e.message}")
             }
+        }
+        return null
+    }
+
+    private fun findLatestJarForType(serverType: String): File? {
+        val jars = minecraftJarsPath.listFiles()?.filter {
+            it.name.startsWith("${serverType}_") && it.name.endsWith(".jar")
+        }?.sortedByDescending { it.lastModified() }
+
+        return jars?.firstOrNull()
+    }
+
+    private fun verifyAllJarsIntegrity() {
+        println("[AutoJarUpdater] Verifying JAR integrity")
+
+        minecraftJarsPath.listFiles()?.forEach { file ->
+            if (file.isFile && file.name.endsWith(".jar")) {
+                val isValid = validateJarIntegrity(file.name)
+                println("[AutoJarUpdater] JAR ${file.name} integrity: ${if (isValid) "VALID" else "INVALID"}")
+            }
+        }
+    }
+
+    private fun validateJarIntegrity(fileName: String): Boolean {
+        val file = File(minecraftJarsPath, fileName)
+        if (!file.exists()) return false
+
+        try {
+            val bytes = file.readBytes()
+            val isValidJar = bytes.size >= 4 &&
+                    bytes[0] == 0x50.toByte() &&
+                    bytes[1] == 0x4B.toByte() &&
+                    (bytes[2] == 0x03.toByte() || bytes[2] == 0x05.toByte() || bytes[2] == 0x07.toByte()) &&
+                    (bytes[3] == 0x04.toByte() || bytes[3] == 0x06.toByte() || bytes[3] == 0x08.toByte())
+
+            if (!isValidJar) {
+                println("[AutoJarUpdater] Invalid JAR format: $fileName")
+                return false
+            }
+
+            if (file.length() < 1024 * 100) {
+                println("[AutoJarUpdater] JAR too small: $fileName (${file.length()} bytes)")
+                return false
+            }
+
+            return true
+
         } catch (e: Exception) {
-            println("[AutoJarUpdater] Error validating JAR integrity: ${e.message}")
+            println("[AutoJarUpdater] Error validating JAR $fileName: ${e.message}")
+            return false
         }
     }
 
     private fun handleMissingJar(fileName: String) {
-        try {
-            println("[AutoJarUpdater] Handling missing JAR: $fileName")
-        } catch (e: Exception) {
-            println("[AutoJarUpdater] Error handling missing JAR: ${e.message}")
+        println("[AutoJarUpdater] Handling missing JAR: $fileName")
+
+        GlobalScope.launch {
+            try {
+                downloadLatestJars()
+            } catch (e: Exception) {
+                println("[AutoJarUpdater] Error re-downloading missing JAR: ${e.message}")
+            }
         }
     }
 
-    private fun getSystemLoad(): Double {
-        return try {
-            val runtime = Runtime.getRuntime()
-            val maxMemory = runtime.maxMemory()
-            val totalMemory = runtime.totalMemory()
-            val freeMemory = runtime.freeMemory()
-            val usedMemory = totalMemory - freeMemory
-            usedMemory.toDouble() / maxMemory.toDouble()
+    private fun updateChecksums() {
+        println("[AutoJarUpdater] Updating JAR checksums")
+
+        val checksums = mutableMapOf<String, Map<String, String>>()
+
+        minecraftJarsPath.listFiles()?.forEach { file ->
+            if (file.isFile && file.name.endsWith(".jar")) {
+                try {
+                    val bytes = file.readBytes()
+                    val md5 = MessageDigest.getInstance("MD5").digest(bytes).joinToString("") { "%02x".format(it) }
+                    val sha256 = MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
+
+                    checksums[file.name] = mapOf(
+                        "md5" to md5,
+                        "sha256" to sha256,
+                        "size" to file.length().toString(),
+                        "lastModified" to file.lastModified().toString()
+                    )
+
+                } catch (e: Exception) {
+                    println("[AutoJarUpdater] Error calculating checksum for ${file.name}: ${e.message}")
+                }
+            }
+        }
+
+        try {
+            checksumFile.parentFile.mkdirs()
+            checksumFile.writeText(JsonLib.fromObject(checksums).toString())
+            println("[AutoJarUpdater] Checksum update completed")
         } catch (e: Exception) {
-            0.5
+            println("[AutoJarUpdater] Error saving checksums: ${e.message}")
         }
     }
 
@@ -657,21 +438,6 @@ class AutomaticJarUpdater(private val module: PluginUpdaterModule) {
             }
         } catch (e: Exception) {
             println("[AutoJarUpdater] Could not send notification: ${e.message}")
-        }
-    }
-
-    private fun parseUpdateInterval(interval: String): Long {
-        val regex = Regex("(\\d+)([hmd])")
-        val match = regex.find(interval) ?: return TimeUnit.HOURS.toMillis(24)
-
-        val value = match.groupValues[1].toLong()
-        val unit = match.groupValues[2]
-
-        return when (unit) {
-            "h" -> TimeUnit.HOURS.toMillis(value)
-            "m" -> TimeUnit.MINUTES.toMillis(value)
-            "d" -> TimeUnit.DAYS.toMillis(value)
-            else -> TimeUnit.HOURS.toMillis(24)
         }
     }
 

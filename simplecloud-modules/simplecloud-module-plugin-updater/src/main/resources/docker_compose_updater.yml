@@ -1,0 +1,195 @@
+version: '3.8'
+
+services:
+  simplecloud:
+    build: .
+    container_name: simplecloud-manager
+    restart: unless-stopped
+    volumes:
+      - ./storage:/opt/simplecloud/storage
+      - ./templates:/opt/simplecloud/templates
+      - ./modules:/opt/simplecloud/modules
+      - ./minecraftjars:/opt/simplecloud/storage/minecraftJars
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - DOCKER_ENABLED=true
+      - UPDATE_INTERVAL=2h
+      - JAVA_OPTS=-Xmx2G -Xms1G
+    networks:
+      - simplecloud-network
+    depends_on:
+      - jar-updater
+    ports:
+      - "1630:1630"
+
+  jar-updater:
+    image: alpine/curl:latest
+    container_name: simplecloud-jar-updater
+    restart: unless-stopped
+    command: |
+      sh -c "
+        while true; do
+          echo '[JAR-UPDATER] Starting version check...'
+          
+          LEAF_LATEST=$$(curl -s https://api.github.com/repos/Winds-Studio/Leaf/releases/latest | grep 'tag_name' | cut -d'\"' -f4 | sed 's/ver-//')
+          if [ ! -z \"$$LEAF_LATEST\" ]; then
+            echo '[JAR-UPDATER] Latest Leaf version: '$$LEAF_LATEST
+            if [ ! -f /jars/LEAF_$$LEAF_LATEST.jar ]; then
+              echo '[JAR-UPDATER] Downloading Leaf '$$LEAF_LATEST
+              rm -f /jars/LEAF_*.jar
+              curl -L -o /jars/LEAF_$$LEAF_LATEST.jar https://github.com/Winds-Studio/Leaf/releases/download/ver-$$LEAF_LATEST/leaf-$$LEAF_LATEST.jar
+              echo '[JAR-UPDATER] Leaf updated successfully'
+            fi
+          fi
+          
+          PAPER_BUILD=$$(curl -s https://api.papermc.io/v2/projects/paper/versions/1.21.7/builds | grep -o '\"build\":[0-9]*' | tail -1 | cut -d':' -f2)
+          if [ ! -z \"$$PAPER_BUILD\" ]; then
+            echo '[JAR-UPDATER] Latest Paper build: '$$PAPER_BUILD
+            if [ ! -f /jars/PAPER_1_21_7_$$PAPER_BUILD.jar ]; then
+              echo '[JAR-UPDATER] Downloading Paper build '$$PAPER_BUILD
+              rm -f /jars/PAPER_*.jar
+              curl -L -o /jars/PAPER_1_21_7_$$PAPER_BUILD.jar https://api.papermc.io/v2/projects/paper/versions/1.21.7/builds/$$PAPER_BUILD/downloads/paper-1.21.7-$$PAPER_BUILD.jar
+              echo '[JAR-UPDATER] Paper updated successfully'
+            fi
+          fi
+          
+          VELOCITY_BUILD=$$(curl -s https://api.papermc.io/v2/projects/velocity/versions/3.4.0-SNAPSHOT/builds | grep -o '\"build\":[0-9]*' | tail -1 | cut -d':' -f2)
+          if [ ! -z \"$$VELOCITY_BUILD\" ]; then
+            echo '[JAR-UPDATER] Latest Velocity build: '$$VELOCITY_BUILD
+            if [ ! -f /jars/VELOCITY_3_4_0_SNAPSHOT_$$VELOCITY_BUILD.jar ]; then
+              echo '[JAR-UPDATER] Downloading Velocity build '$$VELOCITY_BUILD
+              rm -f /jars/VELOCITY_*.jar
+              curl -L -o /jars/VELOCITY_3_4_0_SNAPSHOT_$$VELOCITY_BUILD.jar https://api.papermc.io/v2/projects/velocity/versions/3.4.0-SNAPSHOT/builds/$$VELOCITY_BUILD/downloads/velocity-3.4.0-SNAPSHOT-$$VELOCITY_BUILD.jar
+              echo '[JAR-UPDATER] Velocity updated successfully'
+            fi
+          fi
+          
+          if [ ! -f /jars/VELOCITYCTD_Releases.jar ]; then
+            echo '[JAR-UPDATER] Downloading VelocityCTD'
+            rm -f /jars/VELOCITYCTD_*.jar
+            curl -L -o /jars/VELOCITYCTD_Releases.jar https://github.com/GemstoneGG/Velocity-CTD/releases/download/Releases/velocity-proxy-3.4.0-SNAPSHOT-all.jar
+            echo '[JAR-UPDATER] VelocityCTD updated successfully'
+          fi
+          
+          if [ -d /templates ]; then
+            echo '[JAR-UPDATER] Updating templates...'
+            for template in /templates/*/; do
+              if [ -d \"$$template\" ]; then
+                template_name=$$(basename \"$$template\")
+                echo '[JAR-UPDATER] Checking template: '$$template_name
+                
+                cp /jars/*.jar \"$$template/\" 2>/dev/null || true
+              fi
+            done
+          fi
+          
+          echo '[JAR-UPDATER] Version check completed. Waiting 2 hours...'
+          sleep 7200  
+        done
+      "
+    volumes:
+      - ./storage/minecraftJars:/jars
+      - ./templates:/templates
+      - ./logs:/logs
+    environment:
+      - TZ=Europe/Rome
+    networks:
+      - simplecloud-network
+
+  version-monitor:
+    image: alpine:latest
+    container_name: simplecloud-version-monitor
+    restart: unless-stopped
+    command: |
+      sh -c "
+        apk add --no-cache curl jq
+        
+        while true; do
+          echo '[VERSION-MONITOR] Checking for version updates...'
+          
+          current_leaf=$$(ls /jars/LEAF_*.jar 2>/dev/null | head -1 | sed 's/.*LEAF_\(.*\)\.jar/\1/')
+          current_paper=$$(ls /jars/PAPER_*.jar 2>/dev/null | head -1 | sed 's/.*PAPER_.*_\([0-9]*\)\.jar/\1/')
+          current_velocity=$$(ls /jars/VELOCITY_*.jar 2>/dev/null | head -1 | sed 's/.*VELOCITY_.*_\([0-9]*\)\.jar/\1/')
+          
+          latest_leaf=$$(curl -s https://api.github.com/repos/Winds-Studio/Leaf/releases/latest | jq -r '.tag_name' | sed 's/ver-//')
+          latest_paper=$$(curl -s https://api.papermc.io/v2/projects/paper/versions/1.21.7/builds | jq -r '.builds[-1].build')
+          latest_velocity=$$(curl -s https://api.papermc.io/v2/projects/velocity/versions/3.4.0-SNAPSHOT/builds | jq -r '.builds[-1].build')
+          
+          if [ \"$$current_leaf\" != \"$$latest_leaf\" ]; then
+            echo '[VERSION-MONITOR] ⚠️  Leaf update available: '$$current_leaf' -> '$$latest_leaf
+            echo \"$$(date): Leaf update available: $$current_leaf -> $$latest_leaf\" >> /logs/version-monitor.log
+          fi
+          
+          if [ \"$$current_paper\" != \"$$latest_paper\" ]; then
+            echo '[VERSION-MONITOR] ⚠️  Paper update available: '$$current_paper' -> '$$latest_paper
+            echo \"$$(date): Paper update available: $$current_paper -> $$latest_paper\" >> /logs/version-monitor.log
+          fi
+          
+          if [ \"$$current_velocity\" != \"$$latest_velocity\" ]; then
+            echo '[VERSION-MONITOR] ⚠️  Velocity update available: '$$current_velocity' -> '$$latest_velocity
+            echo \"$$(date): Velocity update available: $$current_velocity -> $$latest_velocity\" >> /logs/version-monitor.log
+          fi
+          
+          echo '[VERSION-MONITOR] Current versions:'
+          echo '  Leaf: '$$current_leaf
+          echo '  Paper: '$$current_paper  
+          echo '  Velocity: '$$current_velocity
+          
+          echo '[VERSION-MONITOR] Latest versions:'
+          echo '  Leaf: '$$latest_leaf
+          echo '  Paper: '$$latest_paper
+          echo '  Velocity: '$$latest_velocity
+          
+          sleep 1800 
+        done
+      "
+    volumes:
+      - ./storage/minecraftJars:/jars:ro
+      - ./logs:/logs
+    environment:
+      - TZ=Europe/Rome
+    networks:
+      - simplecloud-network
+
+  cleanup-service:
+    image: alpine:latest
+    container_name: simplecloud-cleanup
+    restart: unless-stopped
+    command: |
+      sh -c "
+        while true; do
+          echo '[CLEANUP] Starting cleanup process...'
+          
+          find /jars -name '*.jar' -mtime +1 -type f -delete 2>/dev/null || true
+          
+          find /logs -name '*.log' -mtime +7 -type f -delete 2>/dev/null || true
+          
+          if [ -d /templates ]; then
+            for template in /templates/*/; do
+              if [ -d \"$$template\" ]; then
+                find \"$$template\" -name '*.jar' -mtime +0.083 -type f -delete 2>/dev/null || true
+              fi
+            done
+          fi
+          
+          echo '[CLEANUP] Cleanup completed'
+          
+          sleep 21600
+        done
+      "
+    volumes:
+      - ./storage/minecraftJars:/jars
+      - ./templates:/templates
+      - ./logs:/logs
+    environment:
+      - TZ=Europe/Rome
+    networks:
+      - simplecloud-network
+
+networks:
+  simplecloud-network:
+    driver: bridge
+
+volumes:
+  simplecloud_data:
+    driver: local
