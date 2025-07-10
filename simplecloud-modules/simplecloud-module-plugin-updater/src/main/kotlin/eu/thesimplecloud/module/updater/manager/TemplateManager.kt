@@ -386,11 +386,11 @@ class TemplateManager(
         try {
             when (templateType) {
                 "SPIGOT" -> {
-                    createSpigotBaseFiles(templateDir)
+                    //createSpigotBaseFiles(templateDir)
                 }
 
                 "VELOCITY" -> {
-                    createVelocityBaseFiles(templateDir)
+                    //createVelocityBaseFiles(templateDir)
                 }
 
                 "BUNGEECORD" -> {

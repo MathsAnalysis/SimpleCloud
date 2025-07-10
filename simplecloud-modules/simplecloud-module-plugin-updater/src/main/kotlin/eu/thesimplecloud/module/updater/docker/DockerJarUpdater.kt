@@ -125,7 +125,8 @@ class DockerJarUpdater {
                     cleanupOldJars(serverType)
 
                     if (downloadWithDocker(serverType, dockerSource, latestVersion)) {
-                        updateTemplatesForServer(serverType, latestVersion)
+
+//                        updateTemplatesForServer(serverType, latestVersion)
 
                         cachedVersions[serverType] = latestVersion
 
@@ -265,7 +266,7 @@ class DockerJarUpdater {
         }
     }
 
-    private suspend fun downloadWithDocker(serverType: String, dockerSource: DockerSource, versionInfo: VersionInfo): Boolean {
+    private fun downloadWithDocker(serverType: String, dockerSource: DockerSource, versionInfo: VersionInfo): Boolean {
         return try {
             println("[DockerJarUpdater] Downloading $serverType using Docker container")
 
