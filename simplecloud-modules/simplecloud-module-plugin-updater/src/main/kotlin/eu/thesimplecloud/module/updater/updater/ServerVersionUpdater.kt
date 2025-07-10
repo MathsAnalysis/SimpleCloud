@@ -1,10 +1,12 @@
 package eu.thesimplecloud.module.updater.updater
 
+import eu.thesimplecloud.api.directorypaths.DirectoryPaths
 import eu.thesimplecloud.module.updater.manager.JarManager
 import kotlinx.coroutines.*
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONObject
+import java.io.File
 import java.util.concurrent.TimeUnit
 
 class ServerVersionUpdater(
@@ -14,9 +16,9 @@ class ServerVersionUpdater(
         .connectTimeout(30, TimeUnit.SECONDS)
         .readTimeout(60, TimeUnit.SECONDS)
         .build()
-        
+
     private val updateScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
-    
+
     data class ServerJar(
         val type: String,
         val version: String,
@@ -24,17 +26,19 @@ class ServerVersionUpdater(
         val url: String,
         val jarName: String
     )
-    
+
     suspend fun updateAllServerJars(): Map<String, Boolean> = withContext(Dispatchers.IO) {
         val results = mutableMapOf<String, Boolean>()
-        
+
+        cleanupPaperclip()
+
         val updateJobs = listOf(
             async { updateLeaf() },
             async { updatePaper() },
             async { updateVelocity() },
             async { updateVelocityCTD() }
         )
-        
+
         updateJobs.forEachIndexed { index, job ->
             val type = when(index) {
                 0 -> "LEAF"
@@ -49,10 +53,19 @@ class ServerVersionUpdater(
                 false
             }
         }
-        
+
         results
     }
-    
+
+    private fun cleanupPaperclip() {
+        val minecraftJarsPath = File(DirectoryPaths.paths.minecraftJarsPath)
+        minecraftJarsPath.listFiles()?.forEach { file ->
+            if (file.name.lowercase().contains("paperclip")) {
+                file.delete()
+            }
+        }
+    }
+
     private suspend fun updateLeaf(): Boolean = withContext(Dispatchers.IO) {
         try {
             val latestRelease = fetchLatestGithubRelease("Winds-Studio", "Leaf")
@@ -64,16 +77,16 @@ class ServerVersionUpdater(
             false
         }
     }
-    
+
     private suspend fun updatePaper(): Boolean = withContext(Dispatchers.IO) {
         try {
             val paperVersion = "1.21.7"
             val latestBuild = fetchLatestPaperBuild(paperVersion)
-            
+
             latestBuild?.let { build ->
                 val jarName = "PAPER_${paperVersion}_${build}.jar"
                 val url = "https://api.papermc.io/v2/projects/paper/versions/$paperVersion/builds/$build/downloads/paper-$paperVersion-$build.jar"
-                
+
                 jarManager.cleanupOldVersions("PAPER_")
                 jarManager.downloadJar(url, jarName)
             } ?: false
@@ -81,16 +94,16 @@ class ServerVersionUpdater(
             false
         }
     }
-    
+
     private suspend fun updateVelocity(): Boolean = withContext(Dispatchers.IO) {
         try {
             val velocityVersion = "3.4.0-SNAPSHOT"
             val latestBuild = fetchLatestVelocityBuild(velocityVersion)
-            
+
             latestBuild?.let { build ->
                 val jarName = "VELOCITY_${velocityVersion.replace(".", "_")}_${build}.jar"
                 val url = "https://api.papermc.io/v2/projects/velocity/versions/$velocityVersion/builds/$build/downloads/velocity-$velocityVersion-$build.jar"
-                
+
                 jarManager.cleanupOldVersions("VELOCITY_")
                 jarManager.downloadJar(url, jarName)
             } ?: false
@@ -98,38 +111,38 @@ class ServerVersionUpdater(
             false
         }
     }
-    
+
     private suspend fun updateVelocityCTD(): Boolean = withContext(Dispatchers.IO) {
         try {
             val jarName = "VELOCITYCTD_Releases.jar"
             val url = "https://github.com/GemstoneGG/Velocity-CTD/releases/download/Releases/velocity-proxy-3.4.0-SNAPSHOT-all.jar"
-            
+
             jarManager.cleanupOldVersions("VELOCITYCTD_")
             jarManager.downloadJar(url, jarName)
         } catch (e: Exception) {
             false
         }
     }
-    
+
     private suspend fun fetchLatestGithubRelease(owner: String, repo: String): ServerJar? = withContext(Dispatchers.IO) {
         try {
             val request = Request.Builder()
                 .url("https://api.github.com/repos/$owner/$repo/releases/latest")
                 .addHeader("User-Agent", "SimpleCloud-Updater")
                 .build()
-                
+
             val response = okHttpClient.newCall(request).execute()
             if (!response.isSuccessful) return@withContext null
-            
+
             val json = JSONObject(response.body?.string() ?: return@withContext null)
             val tagName = json.getString("tag_name")
             val version = if (tagName.startsWith("ver-")) tagName.substring(4) else tagName
             val assets = json.getJSONArray("assets")
-            
+
             for (i in 0 until assets.length()) {
                 val asset = assets.getJSONObject(i)
                 val name = asset.getString("name")
-                
+
                 if (name.endsWith(".jar") && !name.contains("sources") && !name.contains("javadoc")) {
                     return@withContext ServerJar(
                         type = "LEAF",
@@ -145,20 +158,20 @@ class ServerVersionUpdater(
             null
         }
     }
-    
+
     private suspend fun fetchLatestPaperBuild(version: String): String? = withContext(Dispatchers.IO) {
         try {
             val request = Request.Builder()
                 .url("https://api.papermc.io/v2/projects/paper/versions/$version/builds")
                 .addHeader("User-Agent", "SimpleCloud-Updater")
                 .build()
-                
+
             val response = okHttpClient.newCall(request).execute()
             if (!response.isSuccessful) return@withContext null
-            
+
             val json = JSONObject(response.body?.string() ?: return@withContext null)
             val builds = json.getJSONArray("builds")
-            
+
             if (builds.length() > 0) {
                 val latestBuild = builds.getJSONObject(builds.length() - 1)
                 return@withContext latestBuild.getInt("build").toString()
@@ -168,20 +181,20 @@ class ServerVersionUpdater(
             null
         }
     }
-    
+
     private suspend fun fetchLatestVelocityBuild(version: String): String? = withContext(Dispatchers.IO) {
         try {
             val request = Request.Builder()
                 .url("https://api.papermc.io/v2/projects/velocity/versions/$version/builds")
                 .addHeader("User-Agent", "SimpleCloud-Updater")
                 .build()
-                
+
             val response = okHttpClient.newCall(request).execute()
             if (!response.isSuccessful) return@withContext null
-            
+
             val json = JSONObject(response.body?.string() ?: return@withContext null)
             val builds = json.getJSONArray("builds")
-            
+
             if (builds.length() > 0) {
                 val latestBuild = builds.getJSONObject(builds.length() - 1)
                 return@withContext latestBuild.getInt("build").toString()
@@ -191,7 +204,56 @@ class ServerVersionUpdater(
             null
         }
     }
-    
+
+    fun syncJarsToTemplates() {
+        val templatesPath = File(DirectoryPaths.paths.templatesPath)
+        val minecraftJarsPath = File(DirectoryPaths.paths.minecraftJarsPath)
+
+        templatesPath.listFiles()?.forEach { templateDir ->
+            if (!templateDir.isDirectory) return@forEach
+
+            templateDir.listFiles()?.forEach { file ->
+                if (file.name.startsWith("LEAF_") ||
+                    file.name.startsWith("PAPER_") ||
+                    file.name.startsWith("VELOCITY_") ||
+                    file.name.startsWith("VELOCITYCTD_") ||
+                    file.name.lowercase().contains("paperclip") ||
+                    file.name == "server.jar") {
+                    file.delete()
+                }
+            }
+
+            val templateType = getTemplateServerType(templateDir)
+            templateType?.let { prefix ->
+                jarManager.getLatestJar(prefix)?.let { latestJar ->
+                    latestJar.copyTo(File(templateDir, latestJar.name), overwrite = true)
+
+                    if (prefix != "VELOCITYCTD_") {
+                        latestJar.copyTo(File(templateDir, "server.jar"), overwrite = true)
+                    }
+                }
+            }
+        }
+    }
+
+    private fun getTemplateServerType(templateDir: File): String? {
+        val configFile = File(templateDir.parentFile.parentFile, "groups/${templateDir.name}.json")
+        if (!configFile.exists()) return null
+
+        return try {
+            val content = configFile.readText()
+            when {
+                content.contains("LEAF_") -> "LEAF_"
+                content.contains("PAPER_") -> "PAPER_"
+                content.contains("VELOCITY_") -> "VELOCITY_"
+                content.contains("VELOCITYCTD_") -> "VELOCITYCTD_"
+                else -> null
+            }
+        } catch (e: Exception) {
+            null
+        }
+    }
+
     fun shutdown() {
         updateScope.cancel()
     }
