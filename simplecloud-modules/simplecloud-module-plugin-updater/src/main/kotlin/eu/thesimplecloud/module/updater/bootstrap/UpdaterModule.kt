@@ -1,198 +1,85 @@
-package eu.thesimplecloud.module.updater.bootstrap
+package eu.thesimplecloud.module.updater
 
-import eu.thesimplecloud.api.directorypaths.DirectoryPaths
 import eu.thesimplecloud.api.external.ICloudModule
 import eu.thesimplecloud.launcher.startup.Launcher
 import eu.thesimplecloud.module.updater.command.UpdaterCommand
 import eu.thesimplecloud.module.updater.config.UpdaterConfig
-import eu.thesimplecloud.module.updater.manager.JarManager
-import eu.thesimplecloud.module.updater.updater.PluginUpdater
-import eu.thesimplecloud.module.updater.updater.ServerVersionUpdater
+import eu.thesimplecloud.module.updater.updater.config.UpdaterConfigLoader
+import eu.thesimplecloud.module.updater.updater.scheduler.UpdateScheduler
+import eu.thesimplecloud.module.updater.updater.service.UpdateService
 import kotlinx.coroutines.*
-import okhttp3.OkHttpClient
-import java.io.File
-import java.util.concurrent.TimeUnit
 
 class UpdaterModule : ICloudModule {
 
-    private lateinit var config: UpdaterConfig
-    private lateinit var jarManager: JarManager
-    private lateinit var serverVersionUpdater: ServerVersionUpdater
-    private lateinit var pluginUpdater: PluginUpdater
+    lateinit var config: UpdaterConfig
+        private set
 
-    private val updateScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
-    private var updateJob: Job? = null
+    lateinit var updateService: UpdateService
+        private set
 
-    private val okHttpClient = OkHttpClient.Builder()
-        .connectTimeout(30, TimeUnit.SECONDS)
-        .readTimeout(60, TimeUnit.SECONDS)
-        .writeTimeout(60, TimeUnit.SECONDS)
-        .followRedirects(true)
-        .followSslRedirects(true)
-        .build()
+    private lateinit var configLoader: UpdaterConfigLoader
+    private lateinit var updateScheduler: UpdateScheduler
+
+    private val moduleScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
     override fun onEnable() {
-        println("[UpdaterModule] Starting...")
+        instance = this
 
-        loadConfig()
-        initializeComponents()
-        registerCommands()
+        println("[UpdaterModule] Inizializzazione modulo...")
+
+        configLoader = UpdaterConfigLoader()
+        config = configLoader.loadConfig()
+
+        updateService = UpdateService(config)
+
+        Launcher.instance.commandManager.registerCommand(this, UpdaterCommand(this))
 
         if (config.enabled) {
-            updateScope.launch {
-                delay(5000)
-                println("[UpdaterModule] Running initial update...")
-                runUpdate()
-            }
+            updateScheduler = UpdateScheduler(this)
+            updateScheduler.start()
 
-            startUpdateScheduler()
+            moduleScope.launch {
+                delay(5000)
+                println("[UpdaterModule] Esecuzione aggiornamento iniziale...")
+                updateService.runFullUpdate()
+            }
         }
+
+        println("[UpdaterModule] Modulo caricato con successo!")
     }
 
     override fun onDisable() {
-        updateJob?.cancel()
-        updateScope.cancel()
-        serverVersionUpdater.shutdown()
+        println("[UpdaterModule] Arresto modulo...")
+
+        if (::updateScheduler.isInitialized) {
+            updateScheduler.stop()
+        }
+
+        moduleScope.cancel()
+
+        println("[UpdaterModule] Modulo arrestato correttamente")
     }
 
-    private fun loadConfig() {
-        val configFile = File(DirectoryPaths.paths.modulesPath + "updater/config.json")
-        config = if (configFile.exists()) {
-            UpdaterConfig.fromFile(configFile)
-        } else {
-            UpdaterConfig.createDefault().also { it.save(configFile) }
+    fun reloadConfig() {
+        config = configLoader.loadConfig()
+        updateService.updateConfig(config)
+
+        if (::updateScheduler.isInitialized) {
+            updateScheduler.stop()
+        }
+
+        if (config.enabled) {
+            updateScheduler = UpdateScheduler(this)
+            updateScheduler.start()
         }
     }
 
-    private fun initializeComponents() {
-        jarManager = JarManager(okHttpClient)
-        serverVersionUpdater = ServerVersionUpdater(jarManager)
-        pluginUpdater = PluginUpdater(okHttpClient)
+    fun saveConfig() {
+        configLoader.saveConfig(config)
     }
 
-    private fun startUpdateScheduler() {
-        println("[UpdaterModule] Starting update scheduler (every ${config.updateIntervalHours} hours)")
-
-        updateJob = updateScope.launch {
-            while (isActive) {
-                delay(config.updateIntervalHours * 60 * 60 * 1000L)
-
-                println("[UpdaterModule] Running scheduled update...")
-                runUpdate()
-            }
-        }
+    companion object {
+        lateinit var instance: UpdaterModule
+            private set
     }
-
-    private suspend fun runUpdate() {
-        println("[UpdaterModule] === STARTING UPDATE PROCESS ===")
-
-        if (config.updateServerJars) {
-            println("[UpdaterModule] Updating server JARs...")
-            val results = serverVersionUpdater.updateAllServerJars()
-
-            println("[UpdaterModule] Server JAR Update Results:")
-            results.forEach { (type, success) ->
-                println("[UpdaterModule] - $type: ${if (success) "SUCCESS ✓" else "FAILED ✗"}")
-            }
-        }
-
-        if (config.updatePlugins) {
-            println("[UpdaterModule] Updating plugins...")
-            val pluginResults = pluginUpdater.updateAllPlugins(config.plugins)
-
-            println("[UpdaterModule] Plugin Update Results:")
-            pluginResults.forEach { (name, success) ->
-                println("[UpdaterModule] - $name: ${if (success) "SUCCESS ✓" else "FAILED ✗"}")
-            }
-        }
-
-        println("[UpdaterModule] === UPDATE PROCESS COMPLETED ===")
-    }
-
-    private fun registerCommands() {
-        Launcher.instance.commandManager.registerCommand(this, UpdaterCommand(this))
-    }
-
-    fun forceUpdate() {
-        updateScope.launch {
-            runUpdate()
-        }
-    }
-
-    fun forceUpdateServers() {
-        updateScope.launch {
-            if (config.updateServerJars) {
-                val results = serverVersionUpdater.updateAllServerJars()
-                println("[UpdaterModule] Server update completed")
-            }
-        }
-    }
-
-    fun forceUpdatePlugins() {
-        updateScope.launch {
-            if (config.updatePlugins) {
-                pluginUpdater.updateAllPlugins(config.plugins)
-                println("[UpdaterModule] Plugin update completed")
-            }
-        }
-    }
-
-    fun getConfig(): UpdaterConfig = config
-
-    fun getStatus(): UpdateStatus {
-        return UpdateStatus(
-            enabled = config.enabled,
-            lastUpdate = System.currentTimeMillis(),
-            nextUpdate = System.currentTimeMillis() + (config.updateIntervalHours * 60 * 60 * 1000L)
-        )
-    }
-
-    suspend fun checkForUpdates(): Map<String, UpdateInfo> = withContext(Dispatchers.IO) {
-        val updates = mutableMapOf<String, UpdateInfo>()
-
-        jarManager.getLatestJar("LEAF_")?.let { currentJar ->
-            val currentVersion = currentJar.name.substringAfter("LEAF_").substringBefore(".jar").replace("_", ".")
-            updates["Leaf"] = UpdateInfo(currentVersion, "Check GitHub for latest")
-        }
-
-        jarManager.getLatestJar("VELOCITYCTD_")?.let { currentJar ->
-            val currentVersion = currentJar.name.substringAfter("VELOCITYCTD_").substringBefore(".jar").replace("_", ".")
-            updates["VelocityCtd"] = UpdateInfo(currentVersion, "Check GitHub for latest")
-        }
-
-        updates
-    }
-
-    suspend fun downloadSpecific(software: String): Boolean = withContext(Dispatchers.IO) {
-        when (software.lowercase()) {
-            "leaf" -> serverVersionUpdater.updateAllServerJars()["LEAF"] ?: false
-            "velocityctd" -> serverVersionUpdater.updateAllServerJars()["VELOCITYCTD"] ?: false
-            "paper" -> serverVersionUpdater.updateAllServerJars()["PAPER"] ?: false
-            "velocity" -> serverVersionUpdater.updateAllServerJars()["VELOCITY"] ?: false
-            else -> false
-        }
-    }
-
-    fun cleanOldVersions() {
-        jarManager.cleanupOldVersions("LEAF_", 1)
-        jarManager.cleanupOldVersions("VELOCITYCTD_", 1)
-        jarManager.cleanupOldVersions("PAPER_", 1)
-        jarManager.cleanupOldVersions("VELOCITY_", 1)
-    }
-
-    fun syncToTemplates() {
-        serverVersionUpdater.syncJarsToTemplates()
-        pluginUpdater.syncPluginsToTemplates()
-    }
-
-    data class UpdateStatus(
-        val enabled: Boolean,
-        val lastUpdate: Long,
-        val nextUpdate: Long
-    )
-
-    data class UpdateInfo(
-        val currentVersion: String,
-        val latestVersion: String
-    )
 }

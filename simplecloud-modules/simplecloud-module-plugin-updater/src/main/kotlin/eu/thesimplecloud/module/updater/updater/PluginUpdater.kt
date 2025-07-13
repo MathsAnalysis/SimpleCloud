@@ -10,7 +10,7 @@ import org.json.JSONObject
 import java.io.File
 
 class PluginUpdater(
-    private val okHttpClient: OkHttpClient
+    val okHttpClient: OkHttpClient
 ) {
     private val pluginsPath = File(DirectoryPaths.paths.storagePath + "plugins")
     private val bukkitPluginsPath = File(pluginsPath, "bukkit")

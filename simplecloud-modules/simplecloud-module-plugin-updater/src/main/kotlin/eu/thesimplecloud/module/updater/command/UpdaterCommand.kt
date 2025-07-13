@@ -4,96 +4,95 @@ import eu.thesimplecloud.api.command.ICommandSender
 import eu.thesimplecloud.launcher.console.command.CommandType
 import eu.thesimplecloud.launcher.console.command.ICommandHandler
 import eu.thesimplecloud.launcher.console.command.annotations.Command
-import eu.thesimplecloud.launcher.console.command.annotations.CommandArgument
 import eu.thesimplecloud.launcher.console.command.annotations.CommandSubPath
-import eu.thesimplecloud.module.updater.bootstrap.UpdaterModule
+import eu.thesimplecloud.module.updater.UpdaterModule
+import eu.thesimplecloud.module.updater.updater.manager.PluginManager
+import eu.thesimplecloud.module.updater.updater.manager.ServerJarManager
+import eu.thesimplecloud.module.updater.updater.manager.TemplateSyncManager
 import kotlinx.coroutines.runBlocking
 
-@Command("updater", CommandType.CONSOLE_AND_INGAME, "updater", ["update", "autoupdate"])
+@Command("updater", CommandType.CONSOLE_AND_INGAME, "updater")
 class UpdaterCommand(
     private val module: UpdaterModule
 ) : ICommandHandler {
 
-    @CommandSubPath("force", "Force immediate update")
-    fun forceUpdate(commandSender: ICommandSender) {
-        commandSender.sendMessage("Starting forced update...")
-        module.forceUpdate()
-        commandSender.sendMessage("Update process started. Check console for progress.")
+    @CommandSubPath("", "Mostra informazioni sul modulo")
+    fun handleHelp(commandSender: ICommandSender) {
+        commandSender.sendMessage("=== SimpleCloud Updater ===")
+        commandSender.sendMessage("/updater status - Mostra stato")
+        commandSender.sendMessage("/updater force - Forza aggiornamento completo")
+        commandSender.sendMessage("/updater force servers - Aggiorna solo server JARs")
+        commandSender.sendMessage("/updater force plugins - Aggiorna solo plugins")
+        commandSender.sendMessage("/updater sync - Sincronizza con template")
+        commandSender.sendMessage("/updater reload - Ricarica configurazione")
     }
 
-    @CommandSubPath("force servers", "Force update server JARs only")
-    fun forceUpdateServers(commandSender: ICommandSender) {
-        commandSender.sendMessage("Starting forced server JAR update...")
-        module.forceUpdateServers()
-        commandSender.sendMessage("Server JAR update process started.")
+    @CommandSubPath("status", "Mostra stato updater")
+    fun handleStatus(commandSender: ICommandSender) {
+        val config = module.config
+        commandSender.sendMessage("=== Stato Updater ===")
+        commandSender.sendMessage("Abilitato: ${config.enabled}")
+        commandSender.sendMessage("Intervallo: ${config.updateIntervalHours} ore")
+        commandSender.sendMessage("Server JARs: ${config.serverJars.enabled}")
+        commandSender.sendMessage("Plugins: ${config.plugins.enabled}")
     }
 
-    @CommandSubPath("force plugins", "Force update plugins only")
-    fun forceUpdatePlugins(commandSender: ICommandSender) {
-        commandSender.sendMessage("Starting forced plugin update...")
-        module.forceUpdatePlugins()
-        commandSender.sendMessage("Plugin update process started.")
-    }
-
-    @CommandSubPath("status", "Show updater status")
-    fun showStatus(commandSender: ICommandSender) {
-        val status = module.getStatus()
-        commandSender.sendMessage("=== Updater Status ===")
-        commandSender.sendMessage("Enabled: ${status.enabled}")
-        commandSender.sendMessage("Last Update: ${java.util.Date(status.lastUpdate)}")
-        commandSender.sendMessage("Next Update: ${java.util.Date(status.nextUpdate)}")
-    }
-
-    @CommandSubPath("check", "Check for available updates")
-    fun checkUpdates(commandSender: ICommandSender) {
-        commandSender.sendMessage("Checking for updates...")
+    @CommandSubPath("force", "Forza aggiornamento completo")
+    fun handleForce(commandSender: ICommandSender) {
+        commandSender.sendMessage("Avvio aggiornamento forzato...")
         runBlocking {
-            val results = module.checkForUpdates()
-            commandSender.sendMessage("=== Available Updates ===")
-            results.forEach { (software, info) ->
-                commandSender.sendMessage("$software: ${info.currentVersion} -> ${info.latestVersion}")
+            module.updateService.runFullUpdate()
+        }
+        commandSender.sendMessage("Aggiornamento completato!")
+    }
+
+    @CommandSubPath("force servers", "Aggiorna solo server JARs")
+    fun handleForceServers(commandSender: ICommandSender) {
+        commandSender.sendMessage("Aggiornamento server JARs...")
+        runBlocking {
+            val manager = ServerJarManager()
+            val results = manager.updateAll(module.config.serverJars)
+
+            commandSender.sendMessage("=== Risultati ===")
+            results.forEach { (name, success) ->
+                commandSender.sendMessage("$name: ${if (success) "SUCCESS" else "FAILED"}")
+            }
+
+            TemplateSyncManager().syncServerJars()
+        }
+    }
+
+    @CommandSubPath("force plugins", "Aggiorna solo plugins")
+    fun handleForcePlugins(commandSender: ICommandSender) {
+        commandSender.sendMessage("Aggiornamento plugins...")
+        runBlocking {
+            val manager = PluginManager()
+            val results = manager.updateAll(module.config.plugins)
+
+            commandSender.sendMessage("=== Risultati ===")
+            results.forEach { (name, success) ->
+                commandSender.sendMessage("$name: ${if (success) "SUCCESS" else "FAILED"}")
+            }
+
+            if (module.config.plugins.syncToTemplates) {
+                TemplateSyncManager().syncPlugins()
             }
         }
     }
 
-    @CommandSubPath("download <software>", "Download specific server software")
-    fun downloadSpecific(
-        commandSender: ICommandSender,
-        @CommandArgument("software") software: String
-    ) {
-        commandSender.sendMessage("Downloading $software...")
-        runBlocking {
-            val success = module.downloadSpecific(software)
-            if (success) {
-                commandSender.sendMessage("Successfully downloaded $software")
-            } else {
-                commandSender.sendMessage("Failed to download $software")
-            }
-        }
+    @CommandSubPath("sync", "Sincronizza con template")
+    fun handleSync(commandSender: ICommandSender) {
+        commandSender.sendMessage("Sincronizzazione con template...")
+        val syncManager = TemplateSyncManager()
+        syncManager.syncServerJars()
+        syncManager.syncPlugins()
+        commandSender.sendMessage("Sincronizzazione completata!")
     }
 
-    @CommandSubPath("clean", "Clean old JAR versions")
-    fun cleanOldVersions(commandSender: ICommandSender) {
-        commandSender.sendMessage("Cleaning old JAR versions...")
-        module.cleanOldVersions()
-        commandSender.sendMessage("Old versions cleaned successfully")
-    }
-
-    @CommandSubPath("sync", "Sync JARs and plugins to templates")
-    fun syncTemplates(commandSender: ICommandSender) {
-        commandSender.sendMessage("Syncing JARs and plugins to templates...")
-        module.syncToTemplates()
-        commandSender.sendMessage("Templates synchronized successfully")
-    }
-
-    @CommandSubPath("list plugins", "List configured plugins")
-    fun listPlugins(commandSender: ICommandSender) {
-        val config = module.getConfig()
-        commandSender.sendMessage("=== Configured Plugins ===")
-        config.plugins.forEach { plugin ->
-            val status = if (plugin.enabled) "ENABLED" else "DISABLED"
-            val platforms = plugin.platforms.joinToString(", ")
-            commandSender.sendMessage("- ${plugin.name} [$status] (${platforms})")
-        }
+    @CommandSubPath("reload", "Ricarica configurazione")
+    fun handleReload(commandSender: ICommandSender) {
+        commandSender.sendMessage("Ricaricamento configurazione...")
+        module.reloadConfig()
+        commandSender.sendMessage("Configurazione ricaricata!")
     }
 }

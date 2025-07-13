@@ -115,7 +115,8 @@ subprojects {
     sourceCompatibility = 8
     targetCompatibility = 8
 
-    task sourcesJar(type: Jar, dependsOn: classes) {
+    tasks.register('sourcesJar', Jar) {
+        dependsOn classes
         archiveClassifier.set('sources')
         from sourceSets.main.allSource
     }
