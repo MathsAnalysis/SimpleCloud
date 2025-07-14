@@ -57,7 +57,7 @@ class ServerVersionUpdater(
         )
 
         updateJobs.forEachIndexed { index, job ->
-            val type = when(index) {
+            val type = when (index) {
                 0 -> "LEAF"
                 1 -> "PAPER"
                 2 -> "VELOCITY"
@@ -128,7 +128,8 @@ class ServerVersionUpdater(
                 if (name.endsWith(".jar") &&
                     !name.contains("sources") &&
                     !name.contains("javadoc") &&
-                    (name.contains("leaf") || name.contains("server"))) {
+                    (name.contains("leaf") || name.contains("server"))
+                ) {
 
                     return@withContext ServerJar(
                         type = "LEAF",
@@ -148,7 +149,8 @@ class ServerVersionUpdater(
         val latestBuild = fetchLatestPaperBuild(paperVersion) ?: return@withContext false
 
         val jarName = "PAPER_${paperVersion.replace(".", "_")}_$latestBuild.jar"
-        val url = "https://api.papermc.io/v2/projects/paper/versions/$paperVersion/builds/$latestBuild/downloads/paper-$paperVersion-$latestBuild.jar"
+        val url =
+            "https://api.papermc.io/v2/projects/paper/versions/$paperVersion/builds/$latestBuild/downloads/paper-$paperVersion-$latestBuild.jar"
 
         jarManager.cleanupOldVersions("PAPER_", keepLatest = 0)
         jarManager.downloadJar(url, jarName)
@@ -159,7 +161,8 @@ class ServerVersionUpdater(
         val latestBuild = fetchLatestVelocityBuild(velocityVersion) ?: return@withContext false
 
         val jarName = "VELOCITY_${velocityVersion.replace(".", "_")}_$latestBuild.jar"
-        val url = "https://api.papermc.io/v2/projects/velocity/versions/$velocityVersion/builds/$latestBuild/downloads/velocity-$velocityVersion-$latestBuild.jar"
+        val url =
+            "https://api.papermc.io/v2/projects/velocity/versions/$velocityVersion/builds/$latestBuild/downloads/velocity-$velocityVersion-$latestBuild.jar"
 
         jarManager.cleanupOldVersions("VELOCITY_", keepLatest = 0)
         jarManager.downloadJar(url, jarName)
@@ -256,10 +259,13 @@ class ServerVersionUpdater(
     }
 
     fun syncJarsToTemplates() {
+        println("[ServerVersionUpdater] Starting JAR synchronization to templates...")
         val templatesPath = File(DirectoryPaths.paths.templatesPath)
 
         templatesPath.listFiles()?.forEach { templateDir ->
             if (!templateDir.isDirectory) return@forEach
+
+            println("[ServerVersionUpdater] Processing template: ${templateDir.name}")
 
             templateDir.listFiles()?.forEach { file ->
                 if (file.name.startsWith("LEAF_") ||
@@ -267,39 +273,140 @@ class ServerVersionUpdater(
                     file.name.startsWith("VELOCITY_") ||
                     file.name.startsWith("VELOCITYCTD_") ||
                     file.name.lowercase().contains("paperclip") ||
-                    file.name == "server.jar") {
+                    file.name == "server.jar"
+                ) {
                     file.delete()
+                    println("[ServerVersionUpdater] Deleted old jar: ${file.name}")
                 }
             }
 
             val templateType = getTemplateServerType(templateDir)
+            println("[ServerVersionUpdater] Template ${templateDir.name} type: $templateType")
+
             templateType?.let { prefix ->
                 jarManager.getLatestJar(prefix)?.let { latestJar ->
-                    latestJar.copyTo(File(templateDir, latestJar.name), overwrite = true)
+                    val specificJarTarget = File(templateDir, latestJar.name)
+                    latestJar.copyTo(specificJarTarget, overwrite = true)
+                    println("[ServerVersionUpdater] Copied ${latestJar.name} to ${templateDir.name}")
 
                     if (prefix != "VELOCITYCTD_") {
-                        latestJar.copyTo(File(templateDir, "server.jar"), overwrite = true)
+                        val serverJarTarget = File(templateDir, "server.jar")
+                        latestJar.copyTo(serverJarTarget, overwrite = true)
+                        println("[ServerVersionUpdater] Copied ${latestJar.name} as server.jar to ${templateDir.name}")
                     }
+                } ?: run {
+                    println("[ServerVersionUpdater] No jar found for prefix: $prefix")
                 }
+            } ?: run {
+                println("[ServerVersionUpdater] Could not determine template type for: ${templateDir.name}")
             }
         }
+
+        println("[ServerVersionUpdater] JAR synchronization to templates completed")
     }
 
     private fun getTemplateServerType(templateDir: File): String? {
         val configFile = File(templateDir.parentFile.parentFile, "groups/${templateDir.name}.json")
-        if (!configFile.exists()) return null
+        if (configFile.exists()) {
+            try {
+                val content = configFile.readText()
+                println("[ServerVersionUpdater] Group config content for ${templateDir.name}: ${content.take(200)}...")
 
-        val content = configFile.readText()
-        return when {
-            content.contains("LEAF_") -> "LEAF_"
-            content.contains("PAPER_") -> "PAPER_"
-            content.contains("VELOCITY_") -> "VELOCITY_"
-            content.contains("VELOCITYCTD_") -> "VELOCITYCTD_"
-            else -> null
+                when {
+                    content.contains("\"Leaf\"") ||
+                            content.contains("\"Leaf-") ||
+                            content.contains("\"name\":\"Leaf") -> {
+                        println("[ServerVersionUpdater] Found Leaf reference in config")
+                        return "LEAF_"
+                    }
+
+                    content.contains("\"Paper\"") ||
+                            content.contains("\"Paper-") ||
+                            content.contains("\"name\":\"Paper") -> {
+                        println("[ServerVersionUpdater] Found Paper reference in config")
+                        return "PAPER_"
+                    }
+
+                    content.contains("\"VelocityCTD\"") ||
+                            content.contains("\"VelocityCTD-") ||
+                            content.contains("\"name\":\"VelocityCTD") -> {
+                        println("[ServerVersionUpdater] Found VelocityCTD reference in config")
+                        return "VELOCITYCTD_"
+                    }
+
+                    content.contains("\"Velocity\"") ||
+                            content.contains("\"Velocity-") ||
+                            content.contains("\"name\":\"Velocity") -> {
+                        println("[ServerVersionUpdater] Found Velocity reference in config")
+                        return "VELOCITY_"
+                    }
+
+                    content.contains("LEAF_") -> return "LEAF_"
+                    content.contains("PAPER_") -> return "PAPER_"
+                    content.contains("VELOCITYCTD_") -> "VELOCITYCTD_"
+                    content.contains("VELOCITY_") -> return "VELOCITY_"
+                }
+            } catch (e: Exception) {
+                println("[ServerVersionUpdater] Error reading config file for ${templateDir.name}: ${e.message}")
+            }
         }
+
+        val templateName = templateDir.name.lowercase()
+        when {
+            templateName.contains("leaf") -> {
+                println("[ServerVersionUpdater] Inferred LEAF from template name: ${templateDir.name}")
+                return "LEAF_"
+            }
+
+            templateName.contains("paper") || templateName.contains("spigot") -> {
+                println("[ServerVersionUpdater] Inferred PAPER from template name: ${templateDir.name}")
+                return "PAPER_"
+            }
+
+            templateName.contains("velocityctd") -> {
+                println("[ServerVersionUpdater] Inferred VELOCITYCTD from template name: ${templateDir.name}")
+                return "VELOCITYCTD_"
+            }
+
+            templateName.contains("velocity") || templateName.contains("proxy") -> {
+                println("[ServerVersionUpdater] Inferred VELOCITY from template name: ${templateDir.name}")
+                return "VELOCITY_"
+            }
+        }
+
+        templateDir.listFiles()?.forEach { file ->
+            when {
+                file.name.startsWith("LEAF_") || file.name.lowercase().contains("leaf") -> {
+                    println("[ServerVersionUpdater] Found existing Leaf jar in template: ${templateDir.name}")
+                    return "LEAF_"
+                }
+
+                file.name.startsWith("PAPER_") || file.name.lowercase().contains("paper") -> {
+                    println("[ServerVersionUpdater] Found existing Paper jar in template: ${templateDir.name}")
+                    return "PAPER_"
+                }
+
+                file.name.startsWith("VELOCITYCTD_") -> {
+                    println("[ServerVersionUpdater] Found existing VelocityCTD jar in template: ${templateDir.name}")
+                    return "VELOCITYCTD_"
+                }
+
+                file.name.startsWith("VELOCITY_") || file.name.lowercase().contains("velocity") -> {
+                    println("[ServerVersionUpdater] Found existing Velocity jar in template: ${templateDir.name}")
+                    return "VELOCITY_"
+                }
+            }
+        }
+
+        println("[ServerVersionUpdater] Could not determine server type for template: ${templateDir.name}")
+        return null
     }
 
     fun shutdown() {
         updateScope.cancel()
+        okHttpClient.dispatcher.executorService.shutdown()
+        okHttpClient.connectionPool.evictAll()
+        okHttpClient.cache?.close()
+        println("[ServerVersionUpdater] Update scope and HTTP client shut down")
     }
 }

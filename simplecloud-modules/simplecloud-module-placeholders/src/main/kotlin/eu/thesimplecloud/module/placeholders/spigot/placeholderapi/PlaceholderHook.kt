@@ -11,14 +11,14 @@ class PlaceholderHook(private val plugin: BukkitPluginMain) : PlaceholderExpansi
 
     override fun getAuthor(): String = "rlqu, Panda"
 
-    override fun getVersion(): String = "2.5.0"
+    override fun getVersion(): String = "2.6.0"
 
     override fun canRegister(): Boolean = true
 
     override fun persist(): Boolean = true
 
     override fun onRequest(player: OfflinePlayer, params: String): String {
-        return ("%$params%").replace(player.uniqueId, plugin.replacePermissionModule, plugin.replaceChatTabModule)
+        return ("%$params%").replace(player.uniqueId)
     }
 
 }

@@ -1,7 +1,12 @@
 package eu.thesimplecloud.module.updater.bootstrap
 
+import eu.thesimplecloud.api.CloudAPI
 import eu.thesimplecloud.api.directorypaths.DirectoryPaths
 import eu.thesimplecloud.api.external.ICloudModule
+import eu.thesimplecloud.api.service.version.ServiceVersion
+import eu.thesimplecloud.api.service.version.loader.LocalServiceVersionHandler
+import eu.thesimplecloud.api.service.version.type.ServiceAPIType
+import eu.thesimplecloud.base.manager.serviceversion.ManagerServiceVersionHandler
 import eu.thesimplecloud.launcher.startup.Launcher
 import eu.thesimplecloud.module.updater.command.UpdaterCommand
 import eu.thesimplecloud.module.updater.config.UpdaterConfig
@@ -19,6 +24,7 @@ class UpdaterModule : ICloudModule {
     private lateinit var jarManager: JarManager
     private lateinit var serverVersionUpdater: ServerVersionUpdater
     private lateinit var pluginUpdater: PluginUpdater
+    private lateinit var localServiceVersionHandler: LocalServiceVersionHandler
 
     private val updateScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var updateJob: Job? = null
@@ -68,6 +74,7 @@ class UpdaterModule : ICloudModule {
         jarManager = JarManager(okHttpClient)
         serverVersionUpdater = ServerVersionUpdater(jarManager)
         pluginUpdater = PluginUpdater(okHttpClient)
+        localServiceVersionHandler = LocalServiceVersionHandler()
     }
 
     private fun startUpdateScheduler() {
@@ -86,6 +93,8 @@ class UpdaterModule : ICloudModule {
     private suspend fun runUpdate() {
         println("[UpdaterModule] === STARTING UPDATE PROCESS ===")
 
+        var updateResult = false
+
         if (config.updateServerJars) {
             println("[UpdaterModule] Updating server JARs...")
             val results = serverVersionUpdater.updateAllServerJars()
@@ -93,7 +102,15 @@ class UpdaterModule : ICloudModule {
             println("[UpdaterModule] Server JAR Update Results:")
             results.forEach { (type, success) ->
                 println("[UpdaterModule] - $type: ${if (success) "SUCCESS ✓" else "FAILED ✗"}")
+                if (success) updateResult = true
             }
+
+            if (updateResult) {
+                registerServiceVersions()
+            }
+
+            println("[UpdaterModule] Syncing JARs to templates...")
+            serverVersionUpdater.syncJarsToTemplates()
         }
 
         if (config.updatePlugins) {
@@ -104,9 +121,82 @@ class UpdaterModule : ICloudModule {
             pluginResults.forEach { (name, success) ->
                 println("[UpdaterModule] - $name: ${if (success) "SUCCESS ✓" else "FAILED ✗"}")
             }
+
+            if (config.syncPluginsToTemplates) {
+                println("[UpdaterModule] Syncing plugins to templates...")
+                pluginUpdater.syncPluginsToTemplates()
+            }
         }
 
         println("[UpdaterModule] === UPDATE PROCESS COMPLETED ===")
+    }
+
+    private fun registerServiceVersions() {
+        try {
+            println("[UpdaterModule] Registering service versions...")
+
+            registerJarVersions("LEAF_", ServiceAPIType.SPIGOT, false)
+            registerJarVersions("PAPER_", ServiceAPIType.SPIGOT, true)
+            registerJarVersions("VELOCITY_", ServiceAPIType.VELOCITY, false)
+            registerJarVersions("VELOCITYCTD_", ServiceAPIType.VELOCITY, false)
+
+            reloadServiceVersions()
+
+            println("[UpdaterModule] Service version registration completed")
+        } catch (e: Exception) {
+            println("[UpdaterModule] Error registering service versions: ${e.message}")
+            e.printStackTrace()
+        }
+    }
+
+    private fun registerJarVersions(prefix: String, serviceAPIType: ServiceAPIType, isPaperClip: Boolean) {
+        jarManager.getLatestJar(prefix)?.let { latestJar ->
+            val version = extractVersionFromJarName(latestJar.name, prefix)
+            if (version != null) {
+                registerVersion(prefix, version, latestJar.toURI().toString(), serviceAPIType, isPaperClip)
+            }
+        }
+    }
+
+    private fun registerVersion(prefix: String, version: String, downloadUrl: String, serviceAPIType: ServiceAPIType, isPaperClip: Boolean) {
+        try {
+            val formattedVersion = version.replace(".", "_").replace("-", "_")
+            val serviceName = "$prefix$formattedVersion"
+
+            val serviceVersion = ServiceVersion(
+                name = serviceName,
+                serviceAPIType = serviceAPIType,
+                downloadURL = downloadUrl,
+                isPaperClip = isPaperClip
+            )
+            localServiceVersionHandler.saveServiceVersion(serviceVersion)
+            println("[UpdaterModule] Registered version: $serviceName")
+
+        } catch (e: Exception) {
+            println("[UpdaterModule] Error registering version $prefix$version: ${e.message}")
+        }
+    }
+
+    private fun reloadServiceVersions() {
+        try {
+            val serviceVersionHandler = CloudAPI.instance.getServiceVersionHandler()
+            if (serviceVersionHandler is ManagerServiceVersionHandler) {
+                serviceVersionHandler.reloadServiceVersions()
+                println("[UpdaterModule] Service versions reloaded successfully")
+            }
+        } catch (e: Exception) {
+            println("[UpdaterModule] Error reloading service versions: ${e.message}")
+        }
+    }
+
+    private fun extractVersionFromJarName(jarName: String, prefix: String): String? {
+        return try {
+            jarName.substringAfter(prefix)
+                .substringBefore(".jar")
+                .replace("_", ".")
+        } catch (e: Exception) {
+            null
+        }
     }
 
     private fun registerCommands() {
@@ -123,6 +213,8 @@ class UpdaterModule : ICloudModule {
         updateScope.launch {
             if (config.updateServerJars) {
                 serverVersionUpdater.updateAllServerJars()
+                registerServiceVersions()
+                serverVersionUpdater.syncJarsToTemplates()
                 println("[UpdaterModule] Server update completed")
             }
         }
@@ -132,12 +224,36 @@ class UpdaterModule : ICloudModule {
         updateScope.launch {
             if (config.updatePlugins) {
                 pluginUpdater.updateAllPlugins(config.plugins)
+                if (config.syncPluginsToTemplates) {
+                    pluginUpdater.syncPluginsToTemplates()
+                }
                 println("[UpdaterModule] Plugin update completed")
             }
         }
     }
 
+    fun forceSyncToTemplates() {
+        try {
+            println("[UpdaterModule] Starting manual template synchronization...")
+            serverVersionUpdater.syncJarsToTemplates()
+            if (config.syncPluginsToTemplates) {
+                pluginUpdater.syncPluginsToTemplates()
+            }
+            println("[UpdaterModule] Manual template synchronization completed")
+        } catch (e: Exception) {
+            println("[UpdaterModule] Error during manual template synchronization: ${e.message}")
+            e.printStackTrace()
+        }
+    }
+
+    fun forceRegisterVersions() {
+        registerServiceVersions()
+    }
+
     fun getConfig(): UpdaterConfig = config
+    fun getServerVersionUpdater(): ServerVersionUpdater = serverVersionUpdater
+    fun getJarManager(): JarManager = jarManager
+    fun getPluginUpdater(): PluginUpdater = pluginUpdater
 
     fun getStatus(): UpdateStatus {
         return UpdateStatus(
@@ -150,39 +266,21 @@ class UpdaterModule : ICloudModule {
     suspend fun checkForUpdates(): Map<String, UpdateInfo> = withContext(Dispatchers.IO) {
         val updates = mutableMapOf<String, UpdateInfo>()
 
-        jarManager.getLatestJar("LEAF_")?.let { currentJar ->
-            val currentVersion = currentJar.name.substringAfter("LEAF_").substringBefore(".jar").replace("_", ".")
-            updates["Leaf"] = UpdateInfo(currentVersion, "Check GitHub for latest")
-        }
+        val jarTypes = mapOf(
+            "LEAF_" to "Leaf",
+            "PAPER_" to "Paper",
+            "VELOCITY_" to "Velocity",
+            "VELOCITYCTD_" to "VelocityCtd"
+        )
 
-        jarManager.getLatestJar("VELOCITYCTD_")?.let { currentJar ->
-            val currentVersion = currentJar.name.substringAfter("VELOCITYCTD_").substringBefore(".jar").replace("_", ".")
-            updates["VelocityCtd"] = UpdateInfo(currentVersion, "Check GitHub for latest")
+        jarTypes.forEach { (prefix, displayName) ->
+            jarManager.getLatestJar(prefix)?.let { currentJar ->
+                val currentVersion = extractVersionFromJarName(currentJar.name, prefix) ?: "unknown"
+                updates[displayName] = UpdateInfo(currentVersion, "Check for latest")
+            }
         }
 
         updates
-    }
-
-    suspend fun downloadSpecific(software: String): Boolean = withContext(Dispatchers.IO) {
-        when (software.lowercase()) {
-            "leaf" -> serverVersionUpdater.updateAllServerJars()["LEAF"] ?: false
-            "velocityctd" -> serverVersionUpdater.updateAllServerJars()["VELOCITYCTD"] ?: false
-            "paper" -> serverVersionUpdater.updateAllServerJars()["PAPER"] ?: false
-            "velocity" -> serverVersionUpdater.updateAllServerJars()["VELOCITY"] ?: false
-            else -> false
-        }
-    }
-
-    fun cleanOldVersions() {
-        jarManager.cleanupOldVersions("LEAF_", 1)
-        jarManager.cleanupOldVersions("VELOCITYCTD_", 1)
-        jarManager.cleanupOldVersions("PAPER_", 1)
-        jarManager.cleanupOldVersions("VELOCITY_", 1)
-    }
-
-    fun syncToTemplates() {
-        serverVersionUpdater.syncJarsToTemplates()
-        pluginUpdater.syncPluginsToTemplates()
     }
 
     data class UpdateStatus(
@@ -195,4 +293,14 @@ class UpdaterModule : ICloudModule {
         val currentVersion: String,
         val latestVersion: String
     )
+
+    companion object {
+        @JvmStatic
+        lateinit var instance: UpdaterModule
+            private set
+    }
+
+    init {
+        instance = this
+    }
 }

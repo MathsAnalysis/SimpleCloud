@@ -1,27 +1,16 @@
 package eu.thesimplecloud.module.placeholders.spigot
 
 import eu.thesimplecloud.api.CloudAPI
-import eu.thesimplecloud.module.permission.PermissionPool
-import eu.thesimplecloud.module.prefix.service.tablist.ProxyTablistHelper
 import eu.thesimplecloud.plugin.startup.CloudPlugin
 import org.bukkit.Bukkit
-import java.util.UUID
+import java.util.*
 
 fun String.replace(
-    uuid: UUID,
-    replacePermissionModule: Boolean = false,
-    replaceChatTabModule: Boolean = false
+    uuid: UUID
 ): String {
 
-    var replacedString = this
+    val replacedString = this
 
-    if (replacePermissionModule) {
-        replacedString = replacedString.replacePermissionModule(uuid)
-    }
-
-    if (replaceChatTabModule) {
-        replacedString = replacedString.replaceChatTabModule(uuid)
-    }
 
     val cloudPlayer = CloudAPI.instance.getCloudPlayerManager().getCloudPlayer(uuid).getBlockingOrNull()
     val proxy = cloudPlayer?.getConnectedProxy()
@@ -70,39 +59,4 @@ fun String.replace(
 
         .replace("%PLAYER_NAME%", cloudPlayer?.getName().toString())
         .replace("%PLAYER_PING%", Bukkit.getPlayer(uuid)?.ping.toString())
-}
-
-fun String.replacePermissionModule(uuid: UUID): String {
-
-    var replacedString = this
-
-    try {
-        //Using cached player because the player is definitely online when this method is called and should be cached.
-        val permissionPlayer = PermissionPool.instance.getPermissionPlayerManager().getCachedPermissionPlayer(uuid)
-
-        replacedString = replacedString
-            .replace("%RANK_NAME%", permissionPlayer?.getHighestPermissionGroup()?.getName().toString())
-            .replace("%RANK_PRIORITY%", permissionPlayer?.getHighestPermissionGroup()?.getPriority().toString())
-    } catch (_: Exception) {
-    }
-
-    return replacedString
-}
-
-fun String.replaceChatTabModule(uuid: UUID): String {
-
-    var replacedString = this
-
-    try {
-        val tablistInformation = ProxyTablistHelper.getTablistInformationByUUID(uuid)
-
-        replacedString = replacedString
-            .replace("%RANK_COLOR%", tablistInformation?.color.toString())
-            .replace("%RANK_PREFIX%", tablistInformation?.prefix.toString())
-            .replace("%RANK_SUFFIX%", tablistInformation?.suffix.toString())
-            .replace("%RANK_TAB_PRIORITY%", tablistInformation?.priority.toString())
-    } catch (_: Exception) {
-    }
-
-    return replacedString
 }
