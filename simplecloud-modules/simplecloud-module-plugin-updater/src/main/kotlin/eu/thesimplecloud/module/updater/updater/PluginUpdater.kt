@@ -110,110 +110,53 @@ class PluginUpdater(
             return@withContext emptyList()
         }
 
-        val (owner, repo) = parts
-        val url = "https://api.github.com/repos/$owner/$repo/releases/latest"
-        println("[PluginUpdater] Fetching from GitHub: $url")
-
         val request = Request.Builder()
-            .url(url)
+            .url("https://api.github.com/repos/${config.githubRepo}/releases/latest")
             .addHeader("User-Agent", "SimpleCloud-PluginUpdater/2.0")
-            .addHeader("Accept", "application/vnd.github.v3+json")
             .build()
 
-        val response = okHttpClient.newCall(request).execute()
-        if (!response.isSuccessful) {
-            println("[PluginUpdater] GitHub API error for ${config.name}: HTTP ${response.code}")
-            return@withContext emptyList()
-        }
+        okHttpClient.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) {
+                println("[PluginUpdater] GitHub API failed for ${config.name}: HTTP ${response.code}")
+                return@withContext emptyList()
+            }
 
-        val json = JSONObject(response.body.string())
-        val assets = json.getJSONArray("assets")
-        val version = json.getString("tag_name")
+            val json = JSONObject(response.body.string())
+            val version = json.getString("tag_name")
+            val assets = json.getJSONArray("assets")
 
-        println("[PluginUpdater] Found GitHub release ${config.name} v$version with ${assets.length()} assets")
+            val results = mutableListOf<PluginInfo>()
 
-        val results = mutableListOf<PluginInfo>()
-
-        when {
-            config.name.contains("LuckPerms") -> {
+            config.platforms.forEach { platform ->
                 for (i in 0 until assets.length()) {
                     val asset = assets.getJSONObject(i)
                     val name = asset.getString("name")
-                    val downloadUrl = asset.getString("browser_download_url")
 
-                    println("[PluginUpdater] - Asset: $name")
-
-                    val matchesName = when {
-                        config.name.contains("Velocity") && name.contains("Velocity", ignoreCase = true)-> true
-                        config.name.contains("Bukkit") && name.contains("Bukkit", ignoreCase = true) -> true
-                        else -> false
-                    }
-
-                    if (matchesName && name.endsWith(".jar") && !name.contains("loader", ignoreCase = true)) {
+                    if (name.endsWith(".jar") && isAssetForPlatform(name, platform)) {
+                        val fileName = config.fileName ?: name
                         results.add(PluginInfo(
                             name = config.name,
                             version = version,
-                            downloadUrl = downloadUrl,
-                            platform = config.platforms.first(),
-                            fileName = config.fileName ?: name
+                            downloadUrl = asset.getString("browser_download_url"),
+                            platform = platform,
+                            fileName = fileName
                         ))
                         break
                     }
                 }
             }
-            config.name.contains("spark") -> {
-                for (i in 0 until assets.length()) {
-                    val asset = assets.getJSONObject(i)
-                    val name = asset.getString("name")
-                    val downloadUrl = asset.getString("browser_download_url")
 
-                    println("[PluginUpdater] - Asset: $name")
-
-                    val matchesName = when {
-                        config.name.contains("velocity") && name.contains("velocity", ignoreCase = true) -> true
-                        !config.name.contains("velocity") && name.contains("bukkit", ignoreCase = true) -> true
-                        else -> false
-                    }
-
-                    if (matchesName && name.endsWith(".jar")) {
-                        results.add(PluginInfo(
-                            name = config.name,
-                            version = version,
-                            downloadUrl = downloadUrl,
-                            platform = config.platforms.first(),
-                            fileName = config.fileName ?: name
-                        ))
-                        break
-                    }
-                }
-            }
-            else -> {
-                for (i in 0 until assets.length()) {
-                    val asset = assets.getJSONObject(i)
-                    val name = asset.getString("name")
-                    val downloadUrl = asset.getString("browser_download_url")
-
-                    println("[PluginUpdater] - Asset: $name")
-
-                    if (name.endsWith(".jar") && !name.contains("sources") && !name.contains("javadoc")) {
-                        results.add(PluginInfo(
-                            name = config.name,
-                            version = version,
-                            downloadUrl = downloadUrl,
-                            platform = config.platforms.first(),
-                            fileName = config.fileName ?: name
-                        ))
-                        break
-                    }
-                }
-            }
+            results
         }
+    }
 
-        if (results.isEmpty()) {
-            println("[PluginUpdater] No suitable assets found for ${config.name}")
+    private fun isAssetForPlatform(assetName: String, platform: PluginPlatform): Boolean {
+        val lowerName = assetName.lowercase()
+        return when (platform) {
+            PluginPlatform.BUKKIT -> !lowerName.contains("velocity") && !lowerName.contains("bungee")
+            PluginPlatform.VELOCITY -> lowerName.contains("velocity")
+            PluginPlatform.UNIVERSAL -> true
         }
-
-        results
     }
 
     private suspend fun fetchFromSpigot(config: PluginConfig): List<PluginInfo> = withContext(Dispatchers.IO) {
@@ -223,22 +166,26 @@ class PluginUpdater(
             .addHeader("User-Agent", "SimpleCloud-PluginUpdater/2.0")
             .build()
 
-        val response = okHttpClient.newCall(request).execute()
-        if (!response.isSuccessful) return@withContext emptyList()
+        okHttpClient.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) {
+                println("[PluginUpdater] Spiget API failed for ${config.name}: HTTP ${response.code}")
+                return@withContext emptyList()
+            }
 
-        val json = JSONObject(response.body?.string() ?: return@withContext emptyList())
-        val version = json.getString("name")
+            val json = JSONObject(response.body!!.string())
+            val version = json.getString("name")
 
-        if (PluginPlatform.BUKKIT in config.platforms) {
-            listOf(PluginInfo(
-                name = config.name,
-                version = version,
-                downloadUrl = "https://api.spiget.org/v2/resources/$resourceId/download",
-                platform = PluginPlatform.BUKKIT,
-                fileName = config.fileName ?: "${config.name}.jar"
-            ))
-        } else {
-            emptyList()
+            if (PluginPlatform.BUKKIT in config.platforms) {
+                listOf(PluginInfo(
+                    name = config.name,
+                    version = version,
+                    downloadUrl = "https://api.spiget.org/v2/resources/$resourceId/download",
+                    platform = PluginPlatform.BUKKIT,
+                    fileName = config.fileName ?: "${config.name}.jar"
+                ))
+            } else {
+                emptyList()
+            }
         }
     }
 
@@ -249,96 +196,97 @@ class PluginUpdater(
             .addHeader("User-Agent", "SimpleCloud-PluginUpdater/2.0")
             .build()
 
-        val response = okHttpClient.newCall(request).execute()
-        if (!response.isSuccessful) return@withContext emptyList()
-
-        val json = JSONObject(response.body?.string() ?: return@withContext emptyList())
-        val versions = json.getJSONArray("result")
-        if (versions.length() == 0) return@withContext emptyList()
-
-        val latestVersion = versions.getJSONObject(0)
-        val version = latestVersion.getString("name")
-        val downloads = latestVersion.getJSONObject("downloads")
-
-        val results = mutableListOf<PluginInfo>()
-
-        config.platforms.forEach { platform ->
-            val platformKey = when (platform) {
-                PluginPlatform.BUKKIT -> "PAPER"
-                PluginPlatform.VELOCITY -> "VELOCITY"
-                PluginPlatform.UNIVERSAL -> return@forEach
+        okHttpClient.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) {
+                println("[PluginUpdater] Hangar API failed for ${config.name}: HTTP ${response.code}")
+                return@withContext emptyList()
             }
 
-            if (downloads.has(platformKey)) {
-                val download = downloads.getJSONObject(platformKey)
-                val downloadUrl = download.getString("downloadUrl")
+            val json = JSONObject(response.body.string())
+            val versions = json.getJSONArray("result")
+            if (versions.length() == 0) return@withContext emptyList()
 
-                val finalUrl = if (downloadUrl.startsWith("http")) {
-                    downloadUrl
-                } else {
-                    "https://hangar.papermc.io$downloadUrl"
+            val latestVersion = versions.getJSONObject(0)
+            val version = latestVersion.getString("name")
+            val downloads = latestVersion.getJSONObject("downloads")
+
+            val results = mutableListOf<PluginInfo>()
+
+            config.platforms.forEach { platform ->
+                val platformKey = when (platform) {
+                    PluginPlatform.BUKKIT -> "PAPER"
+                    PluginPlatform.VELOCITY -> "VELOCITY"
+                    PluginPlatform.UNIVERSAL -> return@forEach
                 }
 
-                results.add(PluginInfo(
-                    name = config.name,
-                    version = version,
-                    downloadUrl = finalUrl,
-                    platform = platform,
-                    fileName = config.fileName ?: "${config.name}-$version.jar"
-                ))
-            }
-        }
+                if (downloads.has(platformKey)) {
+                    val download = downloads.getJSONObject(platformKey)
+                    val downloadUrl = download.getString("downloadUrl")
 
-        results
+                    val finalUrl = if (downloadUrl.startsWith("http")) {
+                        downloadUrl
+                    } else {
+                        "https://hangar.papermc.io$downloadUrl"
+                    }
+
+                    results.add(PluginInfo(
+                        name = config.name,
+                        version = version,
+                        downloadUrl = finalUrl,
+                        platform = platform,
+                        fileName = config.fileName ?: "${config.name}.jar"
+                    ))
+                }
+            }
+
+            results
+        }
     }
 
     private suspend fun fetchFromModrinth(config: PluginConfig): List<PluginInfo> = withContext(Dispatchers.IO) {
-        val projectId = config.modrinthId!!
         val request = Request.Builder()
-            .url("https://api.modrinth.com/v2/project/$projectId/version")
+            .url("https://api.modrinth.com/v2/project/${config.modrinthId}/version")
             .addHeader("User-Agent", "SimpleCloud-PluginUpdater/2.0")
             .build()
 
-        val response = okHttpClient.newCall(request).execute()
-        if (!response.isSuccessful) return@withContext emptyList()
-
-        val versions = JSONArray(response.body?.string() ?: return@withContext emptyList())
-        if (versions.length() == 0) return@withContext emptyList()
-
-        val latestVersion = versions.getJSONObject(0)
-        val version = latestVersion.getString("version_number")
-        val files = latestVersion.getJSONArray("files")
-
-        val results = mutableListOf<PluginInfo>()
-
-        for (i in 0 until files.length()) {
-            val file = files.getJSONObject(i)
-            val fileName = file.getString("filename")
-            val downloadUrl = file.getString("url")
-
-            if (!fileName.endsWith(".jar")) continue
-
-            val loaders = latestVersion.getJSONArray("loaders")
-            val platform = when {
-                loaders.toString().contains("velocity") -> PluginPlatform.VELOCITY
-                loaders.toString().contains("bukkit") ||
-                        loaders.toString().contains("spigot") ||
-                        loaders.toString().contains("paper") -> PluginPlatform.BUKKIT
-                else -> PluginPlatform.UNIVERSAL
+        okHttpClient.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) {
+                println("[PluginUpdater] Modrinth API failed for ${config.name}: HTTP ${response.code}")
+                return@withContext emptyList()
             }
 
-            if (platform in config.platforms || PluginPlatform.UNIVERSAL in config.platforms) {
-                results.add(PluginInfo(
-                    name = config.name,
-                    version = version,
-                    downloadUrl = downloadUrl,
-                    platform = platform,
-                    fileName = config.fileName ?: fileName
-                ))
+            val json = JSONArray(response.body.string())
+            if (json.length() == 0) {
+                println("[PluginUpdater] No versions found for ${config.name} on Modrinth")
+                return@withContext emptyList()
             }
+
+            val latestVersion = json.getJSONObject(0)
+            val version = latestVersion.getString("version_number")
+            val files = latestVersion.getJSONArray("files")
+
+            val results = mutableListOf<PluginInfo>()
+
+            config.platforms.forEach { platform ->
+                for (i in 0 until files.length()) {
+                    val file = files.getJSONObject(i)
+                    val filename = file.getString("filename")
+                    if (filename.endsWith(".jar")) {
+                        val fileName = config.fileName ?: filename
+                        results.add(PluginInfo(
+                            name = config.name,
+                            version = version,
+                            downloadUrl = file.getString("url"),
+                            platform = platform,
+                            fileName = fileName
+                        ))
+                        break
+                    }
+                }
+            }
+
+            results
         }
-
-        results
     }
 
     private suspend fun fetchCustomUrl(config: PluginConfig): List<PluginInfo> = withContext(Dispatchers.IO) {
@@ -384,17 +332,18 @@ class PluginUpdater(
                 .addHeader("User-Agent", "SimpleCloud-PluginUpdater/2.0")
                 .build()
 
-            val response = okHttpClient.newCall(request).execute()
-            if (!response.isSuccessful) {
-                println("[PluginUpdater] Failed to download ${info.name}: HTTP ${response.code}")
-                return@withContext false
-            }
+            okHttpClient.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) {
+                    println("[PluginUpdater] Failed to download ${info.name}: HTTP ${response.code}")
+                    return@withContext false
+                }
 
-            response.body.use { body ->
-                targetFile.outputStream().use { output ->
-                    body.byteStream().use { input ->
-                        val bytes = input.copyTo(output)
-                        println("[PluginUpdater] Downloaded ${info.name}: ${bytes / 1024 / 1024} MB")
+                response.body.use { body ->
+                    targetFile.outputStream().use { output ->
+                        body.byteStream().use { input ->
+                            val bytes = input.copyTo(output)
+                            println("[PluginUpdater] Downloaded ${info.name}: ${bytes / 1024 / 1024} MB")
+                        }
                     }
                 }
             }

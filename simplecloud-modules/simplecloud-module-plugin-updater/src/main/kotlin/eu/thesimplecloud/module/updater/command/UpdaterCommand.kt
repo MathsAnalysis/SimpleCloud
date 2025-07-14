@@ -23,29 +23,15 @@ class UpdaterCommand(
         commandSender.sendMessage("§aUpdate process started. Check console for progress.")
     }
 
-    @CommandSubPath("force servers", "Force update server JARs only")
-    fun forceUpdateServers(commandSender: ICommandSender) {
-        commandSender.sendMessage("§6Starting forced server JAR update...")
-        module.forceUpdateServers()
-        commandSender.sendMessage("§aServer JAR update process started.")
-    }
-
-    @CommandSubPath("force plugins", "Force update plugins only")
-    fun forceUpdatePlugins(commandSender: ICommandSender) {
-        commandSender.sendMessage("§6Starting forced plugin update...")
-        module.forceUpdatePlugins()
-        commandSender.sendMessage("§aPlugin update process started.")
-    }
-
-    @CommandSubPath("sync templates", "Force sync JARs and plugins to templates")
-    fun syncTemplates(commandSender: ICommandSender) {
-        commandSender.sendMessage("§6Starting manual template synchronization...")
+    @CommandSubPath("register-versions", "Force register service versions from existing JARs")
+    fun forceRegisterVersions(commandSender: ICommandSender) {
+        commandSender.sendMessage("§6Starting forced service version registration...")
 
         try {
-            module.forceSyncToTemplates()
-            commandSender.sendMessage("§aTemplate synchronization completed successfully!")
+            module.forceRegisterVersions()
+            commandSender.sendMessage("§aService version registration completed. Check console for details.")
         } catch (e: Exception) {
-            commandSender.sendMessage("§cError during template synchronization: ${e.message}")
+            commandSender.sendMessage("§cError during service version registration: ${e.message}")
         }
     }
 
@@ -64,11 +50,10 @@ class UpdaterCommand(
     @CommandSubPath("status", "Show updater status")
     fun status(commandSender: ICommandSender) {
         try {
-            val status = module.getStatus()
             val config = module.getConfig()
 
             commandSender.sendMessage("§6=== Updater Status ===")
-            commandSender.sendMessage("§aEnabled: ${status.enabled}")
+            commandSender.sendMessage("§aEnabled: ${config.enabled}")
             commandSender.sendMessage("§aUpdate Server JARs: ${config.updateServerJars}")
             commandSender.sendMessage("§aUpdate Plugins: ${config.updatePlugins}")
             commandSender.sendMessage("§aSync Plugins to Templates: ${config.syncPluginsToTemplates}")
@@ -78,31 +63,6 @@ class UpdaterCommand(
 
         } catch (e: Exception) {
             commandSender.sendMessage("§cError getting status: ${e.message}")
-        }
-    }
-
-    @CommandSubPath("check", "Check for available updates")
-    fun checkUpdates(commandSender: ICommandSender) {
-        commandSender.sendMessage("§6Checking for available updates...")
-
-        runBlocking {
-            try {
-                val updates = module.checkForUpdates()
-
-                commandSender.sendMessage("§6=== Available Updates ===")
-                if (updates.isEmpty()) {
-                    commandSender.sendMessage("§aNo server JARs found to check")
-                } else {
-                    updates.forEach { (name, info) ->
-                        commandSender.sendMessage("§a$name:")
-                        commandSender.sendMessage("  §7Current: ${info.currentVersion}")
-                        commandSender.sendMessage("  §7Latest: ${info.latestVersion}")
-                    }
-                }
-
-            } catch (e: Exception) {
-                commandSender.sendMessage("§cError checking updates: ${e.message}")
-            }
         }
     }
 
@@ -188,20 +148,43 @@ class UpdaterCommand(
 
             commandSender.sendMessage("§6=== Registered Service Versions ===")
 
-            val leafVersions = versions.filter { it.name.startsWith("Leaf") }
-            val paperVersions = versions.filter { it.name.startsWith("Paper") }
-            val velocityVersions = versions.filter { it.name.startsWith("Velocity") }
+            val leafVersions = versions.filter { it.name.startsWith("LEAF_") }
+            val paperVersions = versions.filter { it.name.startsWith("PAPER_") }
+            val velocityVersions = versions.filter { it.name.startsWith("VELOCITY_") && !it.name.startsWith("VELOCITYCTD_") }
+            val velocityCtdVersions = versions.filter { it.name.startsWith("VELOCITYCTD_") }
 
             commandSender.sendMessage("§aLeaf versions (${leafVersions.size}):")
-            leafVersions.forEach { commandSender.sendMessage("  §7- ${it.name}") }
+            if (leafVersions.isEmpty()) {
+                commandSender.sendMessage("  §7- None found")
+            } else {
+                leafVersions.forEach { commandSender.sendMessage("  §7- ${it.name}") }
+            }
 
             commandSender.sendMessage("§aPaper versions (${paperVersions.size}):")
-            paperVersions.forEach { commandSender.sendMessage("  §7- ${it.name}") }
+            if (paperVersions.isEmpty()) {
+                commandSender.sendMessage("  §7- None found")
+            } else {
+                paperVersions.forEach { commandSender.sendMessage("  §7- ${it.name}") }
+            }
 
             commandSender.sendMessage("§aVelocity versions (${velocityVersions.size}):")
-            velocityVersions.forEach { commandSender.sendMessage("  §7- ${it.name}") }
+            if (velocityVersions.isEmpty()) {
+                commandSender.sendMessage("  §7- None found")
+            } else {
+                velocityVersions.forEach { commandSender.sendMessage("  §7- ${it.name}") }
+            }
+
+            commandSender.sendMessage("§aVelocityCTD versions (${velocityCtdVersions.size}):")
+            if (velocityCtdVersions.isEmpty()) {
+                commandSender.sendMessage("  §7- None found")
+            } else {
+                velocityCtdVersions.forEach { commandSender.sendMessage("  §7- ${it.name}") }
+            }
 
             commandSender.sendMessage("§6Total versions: ${versions.size}")
+
+            val localVersionsFile = File(DirectoryPaths.paths.storagePath + "localServiceVersions.json")
+            commandSender.sendMessage("§6Local versions file: ${if (localVersionsFile.exists()) "§aExists" else "§cMissing"}")
 
         } catch (e: Exception) {
             commandSender.sendMessage("§cError getting service versions: ${e.message}")
@@ -234,6 +217,33 @@ class UpdaterCommand(
 
         } catch (e: Exception) {
             commandSender.sendMessage("§cError showing config: ${e.message}")
+        }
+    }
+
+    @CommandSubPath("debug", "Show debug information")
+    fun debug(commandSender: ICommandSender) {
+        try {
+            commandSender.sendMessage("§6=== Debug Information ===")
+
+            commandSender.sendMessage("§6Important Paths:")
+            commandSender.sendMessage("  §7Storage: ${DirectoryPaths.paths.storagePath}")
+            commandSender.sendMessage("  §7Minecraft JARs: ${DirectoryPaths.paths.minecraftJarsPath}")
+            commandSender.sendMessage("  §7Templates: ${DirectoryPaths.paths.templatesPath}")
+
+            val localVersionsFile = File(DirectoryPaths.paths.storagePath + "localServiceVersions.json")
+            commandSender.sendMessage("§6Configuration Files:")
+            commandSender.sendMessage("  §7localServiceVersions.json: ${if (localVersionsFile.exists()) "§aExists (${localVersionsFile.length()} bytes)" else "§cMissing"}")
+
+            val serviceVersionHandler = CloudAPI.instance.getServiceVersionHandler()
+            commandSender.sendMessage("§6Service Version Handler:")
+            commandSender.sendMessage("  §7Type: ${serviceVersionHandler::class.java.simpleName}")
+            commandSender.sendMessage("  §7Total versions: ${serviceVersionHandler.getAllVersions().size}")
+
+            commandSender.sendMessage("§6=== End Debug ===")
+
+        } catch (e: Exception) {
+            commandSender.sendMessage("§cError getting debug info: ${e.message}")
+            e.printStackTrace()
         }
     }
 }

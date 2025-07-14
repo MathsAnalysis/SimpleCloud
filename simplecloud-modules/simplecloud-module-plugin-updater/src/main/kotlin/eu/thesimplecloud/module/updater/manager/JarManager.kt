@@ -30,18 +30,18 @@ class JarManager(
             .addHeader("User-Agent", "SimpleCloud-JarManager/2.0")
             .build()
 
-        val response = okHttpClient.newCall(request).execute()
+        okHttpClient.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) {
+                println("[JarManager] Failed to download $jarName: HTTP ${response.code}")
+                return@withContext false
+            }
 
-        if (!response.isSuccessful) {
-            println("[JarManager] Failed to download $jarName: HTTP ${response.code}")
-            return@withContext false
-        }
-
-        response.body.use { body ->
-            targetFile.outputStream().use { output ->
-                body.byteStream().use { input ->
-                    val bytes = input.copyTo(output)
-                    println("[JarManager] Downloaded $jarName: ${bytes / 1024 / 1024} MB")
+            response.body.use { body ->
+                targetFile.outputStream().use { output ->
+                    body.byteStream().use { input ->
+                        val bytes = input.copyTo(output)
+                        println("[JarManager] Downloaded $jarName: ${bytes / 1024 / 1024} MB")
+                    }
                 }
             }
         }

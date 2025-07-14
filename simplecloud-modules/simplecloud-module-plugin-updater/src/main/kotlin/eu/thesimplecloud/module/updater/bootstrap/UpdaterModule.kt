@@ -49,15 +49,23 @@ class UpdaterModule : ICloudModule {
                 delay(5000)
                 println("[UpdaterModule] Running initial update...")
                 runUpdate()
+
+                delay(2000)
+                registerServiceVersions()
             }
 
             startUpdateScheduler()
+        } else {
+            registerServiceVersions()
         }
     }
 
     override fun onDisable() {
         updateJob?.cancel()
         updateScope.cancel()
+        okHttpClient.dispatcher.executorService.shutdown()
+        okHttpClient.connectionPool.evictAll()
+        okHttpClient.cache?.close()
         serverVersionUpdater.shutdown()
     }
 
@@ -86,6 +94,7 @@ class UpdaterModule : ICloudModule {
 
                 println("[UpdaterModule] Running scheduled update...")
                 runUpdate()
+                registerServiceVersions()
             }
         }
     }
@@ -106,6 +115,7 @@ class UpdaterModule : ICloudModule {
             }
 
             if (updateResult) {
+                delay(1000)
                 registerServiceVersions()
             }
 
@@ -133,35 +143,98 @@ class UpdaterModule : ICloudModule {
 
     private fun registerServiceVersions() {
         try {
-            println("[UpdaterModule] Registering service versions...")
+            println("[UpdaterModule] === STARTING SERVICE VERSION REGISTRATION ===")
 
-            registerJarVersions("LEAF_", ServiceAPIType.SPIGOT, false)
-            registerJarVersions("PAPER_", ServiceAPIType.SPIGOT, true)
-            registerJarVersions("VELOCITY_", ServiceAPIType.VELOCITY, false)
-            registerJarVersions("VELOCITYCTD_", ServiceAPIType.VELOCITY, false)
+            val jarsPath = File(DirectoryPaths.paths.minecraftJarsPath)
+            println("[UpdaterModule] Jars directory: ${jarsPath.absolutePath}")
+            println("[UpdaterModule] Jars directory exists: ${jarsPath.exists()}")
+
+            if (jarsPath.exists()) {
+                val allJars = jarsPath.listFiles()?.filter { it.name.endsWith(".jar") } ?: emptyList()
+                println("[UpdaterModule] Found ${allJars.size} jar files:")
+                allJars.forEach { jar ->
+                    println("[UpdaterModule] - ${jar.name} (${jar.length()} bytes)")
+                }
+            }
+
+            val localVersionsFile = File(DirectoryPaths.paths.storagePath + "localServiceVersions.json")
+            println("[UpdaterModule] Local versions file: ${localVersionsFile.absolutePath}")
+            println("[UpdaterModule] Local versions file exists: ${localVersionsFile.exists()}")
+
+            if (localVersionsFile.exists()) {
+                val existingVersions = localServiceVersionHandler.loadVersions()
+                println("[UpdaterModule] Existing local versions: ${existingVersions.size}")
+                existingVersions.forEach { version ->
+                    println("[UpdaterModule] - ${version.name} (${version.serviceAPIType})")
+                }
+            }
+
+            var registeredCount = 0
+
+            if (config.serverVersions.updateLeaf) {
+                registeredCount += registerJarVersions("LEAF_", ServiceAPIType.SPIGOT, false)
+            }
+
+            if (config.serverVersions.updatePaper) {
+                registeredCount += registerJarVersions("PAPER_", ServiceAPIType.SPIGOT, true)
+            }
+
+            if (config.serverVersions.updateVelocity) {
+                registeredCount += registerJarVersions("VELOCITY_", ServiceAPIType.VELOCITY, false)
+            }
+
+            if (config.serverVersions.updateVelocityCtd) {
+                registeredCount += registerJarVersions("VELOCITYCTD_", ServiceAPIType.VELOCITY, false)
+            }
+
+            println("[UpdaterModule] Registered $registeredCount new service versions")
 
             reloadServiceVersions()
 
-            println("[UpdaterModule] Service version registration completed")
+            println("[UpdaterModule] === SERVICE VERSION REGISTRATION COMPLETED ===")
         } catch (e: Exception) {
-            println("[UpdaterModule] Error registering service versions: ${e.message}")
+            println("[UpdaterModule] ERROR in service version registration: ${e.message}")
             e.printStackTrace()
         }
     }
 
-    private fun registerJarVersions(prefix: String, serviceAPIType: ServiceAPIType, isPaperClip: Boolean) {
-        jarManager.getLatestJar(prefix)?.let { latestJar ->
-            val version = extractVersionFromJarName(latestJar.name, prefix)
-            if (version != null) {
-                registerVersion(prefix, version, latestJar.toURI().toString(), serviceAPIType, isPaperClip)
+    private fun registerJarVersions(prefix: String, serviceAPIType: ServiceAPIType, isPaperClip: Boolean): Int {
+        return try {
+            val latestJar = jarManager.getLatestJar(prefix)
+            if (latestJar != null && latestJar.exists() && latestJar.length() > 0) {
+                val version = extractVersionFromJarName(latestJar.name, prefix)
+                if (version != null && version.isNotBlank()) {
+                    val success = registerVersion(prefix, version, latestJar.toURI().toString(), serviceAPIType, isPaperClip)
+                    if (success) {
+                        println("[UpdaterModule] ✓ Registered: ${latestJar.name}")
+                        return@registerJarVersions 1
+                    } else {
+                        println("[UpdaterModule] ✗ Failed to register: ${latestJar.name}")
+                    }
+                } else {
+                    println("[UpdaterModule] ✗ Could not extract version from: ${latestJar.name}")
+                }
+            } else {
+                println("[UpdaterModule] ✗ No valid jar found for prefix: $prefix")
             }
+            0
+        } catch (e: Exception) {
+            println("[UpdaterModule] ERROR registering jar versions for $prefix: ${e.message}")
+            e.printStackTrace()
+            0
         }
     }
 
-    private fun registerVersion(prefix: String, version: String, downloadUrl: String, serviceAPIType: ServiceAPIType, isPaperClip: Boolean) {
-        try {
+    private fun registerVersion(prefix: String, version: String, downloadUrl: String, serviceAPIType: ServiceAPIType, isPaperClip: Boolean): Boolean {
+        return try {
             val formattedVersion = version.replace(".", "_").replace("-", "_")
             val serviceName = "$prefix$formattedVersion"
+
+            println("[UpdaterModule] Creating ServiceVersion:")
+            println("[UpdaterModule] - Name: $serviceName")
+            println("[UpdaterModule] - Type: $serviceAPIType")
+            println("[UpdaterModule] - URL: $downloadUrl")
+            println("[UpdaterModule] - PaperClip: $isPaperClip")
 
             val serviceVersion = ServiceVersion(
                 name = serviceName,
@@ -169,32 +242,71 @@ class UpdaterModule : ICloudModule {
                 downloadURL = downloadUrl,
                 isPaperClip = isPaperClip
             )
+
             localServiceVersionHandler.saveServiceVersion(serviceVersion)
-            println("[UpdaterModule] Registered version: $serviceName")
+            println("[UpdaterModule] ✓ Successfully saved ServiceVersion: $serviceName")
+
+            val savedVersions = localServiceVersionHandler.loadVersions()
+            val found = savedVersions.find { it.name == serviceName }
+            if (found != null) {
+                println("[UpdaterModule] ✓ Verified ServiceVersion in file: $serviceName")
+                true
+            } else {
+                println("[UpdaterModule] ✗ ServiceVersion not found in file after saving: $serviceName")
+                false
+            }
 
         } catch (e: Exception) {
-            println("[UpdaterModule] Error registering version $prefix$version: ${e.message}")
+            println("[UpdaterModule] ERROR saving ServiceVersion $prefix$version: ${e.message}")
+            e.printStackTrace()
+            false
         }
     }
 
     private fun reloadServiceVersions() {
         try {
+            println("[UpdaterModule] Reloading service versions in manager...")
             val serviceVersionHandler = CloudAPI.instance.getServiceVersionHandler()
             if (serviceVersionHandler is ManagerServiceVersionHandler) {
                 serviceVersionHandler.reloadServiceVersions()
-                println("[UpdaterModule] Service versions reloaded successfully")
+
+                val allVersions = serviceVersionHandler.getAllVersions()
+                println("[UpdaterModule] Total service versions loaded: ${allVersions.size}")
+
+                val localVersions = allVersions.filter {
+                    it.name.startsWith("LEAF_") || it.name.startsWith("PAPER_") ||
+                            it.name.startsWith("VELOCITY_") || it.name.startsWith("VELOCITYCTD_")
+                }
+                println("[UpdaterModule] Local service versions loaded: ${localVersions.size}")
+                localVersions.forEach { version ->
+                    println("[UpdaterModule] - ${version.name}")
+                }
+
+                println("[UpdaterModule] ✓ Service versions reloaded successfully")
+            } else {
+                println("[UpdaterModule] ✗ ServiceVersionHandler is not ManagerServiceVersionHandler")
             }
         } catch (e: Exception) {
-            println("[UpdaterModule] Error reloading service versions: ${e.message}")
+            println("[UpdaterModule] ERROR reloading service versions: ${e.message}")
+            e.printStackTrace()
         }
     }
 
     private fun extractVersionFromJarName(jarName: String, prefix: String): String? {
         return try {
-            jarName.substringAfter(prefix)
-                .substringBefore(".jar")
-                .replace("_", ".")
+            val versionPart = jarName.substringAfter(prefix).substringBefore(".jar")
+
+            if (versionPart.isBlank()) {
+                println("[UpdaterModule] Empty version part for jar: $jarName")
+                return null
+            }
+
+            val cleanVersion = versionPart.replace("_", ".")
+            println("[UpdaterModule] Extracted version '$cleanVersion' from jar: $jarName")
+            cleanVersion
+
         } catch (e: Exception) {
+            println("[UpdaterModule] Error extracting version from $jarName: ${e.message}")
             null
         }
     }
@@ -202,6 +314,7 @@ class UpdaterModule : ICloudModule {
     private fun registerCommands() {
         Launcher.instance.commandManager.registerCommand(this, UpdaterCommand(this))
     }
+
 
     fun forceUpdate() {
         updateScope.launch {
@@ -250,11 +363,6 @@ class UpdaterModule : ICloudModule {
         registerServiceVersions()
     }
 
-    fun getConfig(): UpdaterConfig = config
-    fun getServerVersionUpdater(): ServerVersionUpdater = serverVersionUpdater
-    fun getJarManager(): JarManager = jarManager
-    fun getPluginUpdater(): PluginUpdater = pluginUpdater
-
     fun getStatus(): UpdateStatus {
         return UpdateStatus(
             enabled = config.enabled,
@@ -276,7 +384,10 @@ class UpdaterModule : ICloudModule {
         jarTypes.forEach { (prefix, displayName) ->
             jarManager.getLatestJar(prefix)?.let { currentJar ->
                 val currentVersion = extractVersionFromJarName(currentJar.name, prefix) ?: "unknown"
-                updates[displayName] = UpdateInfo(currentVersion, "Check for latest")
+                updates[displayName] = UpdateInfo(
+                    currentVersion = currentVersion,
+                    latestVersion = "Check manually"
+                )
             }
         }
 
@@ -294,13 +405,8 @@ class UpdaterModule : ICloudModule {
         val latestVersion: String
     )
 
-    companion object {
-        @JvmStatic
-        lateinit var instance: UpdaterModule
-            private set
-    }
-
-    init {
-        instance = this
-    }
+    fun getConfig(): UpdaterConfig = config
+    fun getServerVersionUpdater(): ServerVersionUpdater = serverVersionUpdater
+    fun getJarManager(): JarManager = jarManager
+    fun getPluginUpdater(): PluginUpdater = pluginUpdater
 }
