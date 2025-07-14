@@ -33,7 +33,7 @@ import eu.thesimplecloud.module.proxy.config.Config
 import eu.thesimplecloud.module.proxy.config.DefaultConfig
 import eu.thesimplecloud.module.proxy.config.ProxyGroupConfiguration
 import eu.thesimplecloud.module.proxy.config.TablistConfiguration
-import eu.thesimplecloud.module.proxy.extensions.mapToLowerCase
+import eu.thesimplecloud.module.proxy.extensions.maplowercase
 import eu.thesimplecloud.plugin.startup.CloudPlugin
 import net.kyori.adventure.text.Component
 import net.kyori.adventure.text.TextComponent
@@ -74,7 +74,7 @@ object ProxyHandler {
 
     fun getTabListConfigurations(): List<TablistConfiguration> {
         return configHolder.getValue().tablistConfigurations.filter {
-            it.proxies.mapToLowerCase().contains(CloudPlugin.instance.thisService().getGroupName().lowercase())
+            it.proxies.maplowercase().contains(CloudPlugin.instance.thisService().getGroupName().lowercase())
         }
     }
 

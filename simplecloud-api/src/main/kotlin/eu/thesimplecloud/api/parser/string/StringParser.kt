@@ -54,7 +54,7 @@ class StringParser : ITypeFromClassParser<String> {
         if (clazz.isEnum) {
             clazz as Class<out Enum<*>>
             val enumValues = clazz.getEnumValues()
-            val indexOf = enumValues.map { it.toLowerCase() }.indexOf(string.toLowerCase())
+            val indexOf = enumValues.map { it.lowercase() }.indexOf(string.lowercase())
             if (indexOf == -1)
                 return null
             return clazz.enumValueOf(enumValues[indexOf]) as R

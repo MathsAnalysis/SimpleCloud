@@ -39,7 +39,7 @@ class CloudPlayerPermissionCheckEvent(
 
 
     fun setHasPermission(boolean: Boolean) {
-        this.state = PermissionState.valueOf(boolean.toString().toUpperCase())
+        this.state = PermissionState.valueOf(boolean.toString().uppercase())
     }
 
 }

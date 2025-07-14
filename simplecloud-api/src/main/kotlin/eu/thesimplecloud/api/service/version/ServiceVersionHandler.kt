@@ -59,7 +59,7 @@ open class ServiceVersionHandler(
     override fun getAllVersionSuffixes(prefix: String): List<String> {
         return getVersionsByPrefix(prefix)
             .map { it.name }
-            .map { it.replace((prefix + "_").toUpperCase(), "") }
+            .map { it.replace((prefix + "_").uppercase(), "") }
     }
 
     override fun getPrefixesByServiceAPIType(serviceAPIType: ServiceAPIType): Set<String> {

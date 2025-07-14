@@ -32,7 +32,7 @@ import eu.thesimplecloud.api.servicegroup.ICloudServiceGroup
 import eu.thesimplecloud.clientserverapi.lib.promise.ICommunicationPromise
 import eu.thesimplecloud.module.proxy.config.Config
 import eu.thesimplecloud.module.proxy.config.ProxyGroupConfiguration
-import eu.thesimplecloud.module.proxy.extensions.mapToLowerCase
+import eu.thesimplecloud.module.proxy.extensions.maplowercase
 import eu.thesimplecloud.module.proxy.service.ProxyHandler
 
 /**
@@ -75,7 +75,7 @@ class MaintenanceToggleListener : IListener {
     private fun isPlayerOnWhitelist(player: ICloudPlayer, serviceGroup: ICloudServiceGroup): Boolean {
         val proxyConfig =
             getProxyConfigurations().firstOrNull { it.proxyGroup == serviceGroup.getName() } ?: return false
-        return proxyConfig.whitelist.mapToLowerCase().contains(player.getName().toLowerCase())
+        return proxyConfig.whitelist.maplowercase().contains(player.getName().lowercase())
     }
 
     private fun isJoinPermissionGranted(player: ICloudPlayer): ICommunicationPromise<Boolean> {

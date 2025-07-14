@@ -61,8 +61,8 @@ interface IPermissionPlayer : IPermissionEntity, Nameable {
      * (case insensitive)
      */
     fun hasPermissionGroup(name: String): Boolean = getPermissionGroupInfoList()
-        .map { it.permissionGroupName.toLowerCase() }
-        .contains(name.toLowerCase())
+        .map { it.permissionGroupName.lowercase() }
+        .contains(name.lowercase())
 
     /**
      * Returns the [IPermissionGroup] of this player

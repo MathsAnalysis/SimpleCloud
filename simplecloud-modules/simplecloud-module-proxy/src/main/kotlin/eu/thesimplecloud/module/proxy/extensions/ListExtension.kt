@@ -29,6 +29,6 @@ package eu.thesimplecloud.module.proxy.extensions
  * Time: 18:09
  */
 
-fun List<String>.mapToLowerCase(): List<String> {
+fun List<String>.maplowercase(): List<String> {
     return this.map { it.lowercase() }
 }

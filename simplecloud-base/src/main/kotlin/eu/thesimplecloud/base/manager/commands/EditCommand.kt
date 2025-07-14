@@ -54,9 +54,9 @@ class EditCommand : ICommandHandler {
     ) {
         val fields = getFieldsOfGroup(name) ?: return
         val serviceGroup = CloudAPI.instance.getCloudServiceGroupManager().getServiceGroupByName(name)!!
-        val lowerCaseFieldNames = fields.map { it.name.toLowerCase() }
-        if (lowerCaseFieldNames.contains(parameter.toLowerCase())) {
-            val field = fields[lowerCaseFieldNames.indexOf(parameter.toLowerCase())]
+        val lowerCaseFieldNames = fields.map { it.name.lowercase() }
+        if (lowerCaseFieldNames.contains(parameter.lowercase())) {
+            val field = fields[lowerCaseFieldNames.indexOf(parameter.lowercase())]
             field.isAccessible = true
             val fieldValue = field[serviceGroup]
             commandSender.sendMessage("Value: $fieldValue")
@@ -74,9 +74,9 @@ class EditCommand : ICommandHandler {
     ) {
         val fields = getFieldsOfGroup(name) ?: return
         val serviceGroup = CloudAPI.instance.getCloudServiceGroupManager().getServiceGroupByName(name)!!
-        val lowerCaseFieldNames = fields.map { it.name.toLowerCase() }
-        if (lowerCaseFieldNames.contains(parameter.toLowerCase())) {
-            val field = fields[lowerCaseFieldNames.indexOf(parameter.toLowerCase())]
+        val lowerCaseFieldNames = fields.map { it.name.lowercase() }
+        if (lowerCaseFieldNames.contains(parameter.lowercase())) {
+            val field = fields[lowerCaseFieldNames.indexOf(parameter.lowercase())]
             field.isAccessible = true
             val type = StringParser().parseToObject(value, field.type)
             if (type == null) {
@@ -118,9 +118,9 @@ class EditCommand : ICommandHandler {
         ) parameter: String
     ) {
         val fields = getFieldsOfWrapper(wrapper)
-        val lowerCaseFieldNames = fields.map { it.name.toLowerCase() }
-        if (lowerCaseFieldNames.contains(parameter.toLowerCase())) {
-            val field = fields[lowerCaseFieldNames.indexOf(parameter.toLowerCase())]
+        val lowerCaseFieldNames = fields.map { it.name.lowercase() }
+        if (lowerCaseFieldNames.contains(parameter.lowercase())) {
+            val field = fields[lowerCaseFieldNames.indexOf(parameter.lowercase())]
             field.isAccessible = true
             val fieldValue = field[wrapper]
             commandSender.sendMessage("Value: $fieldValue")
@@ -140,9 +140,9 @@ class EditCommand : ICommandHandler {
         @CommandArgument("value") value: String
     ) {
         val fields = getFieldsOfWrapper(wrapper)
-        val lowerCaseFieldNames = fields.map { it.name.toLowerCase() }
-        if (lowerCaseFieldNames.contains(parameter.toLowerCase())) {
-            val field = fields[lowerCaseFieldNames.indexOf(parameter.toLowerCase())]
+        val lowerCaseFieldNames = fields.map { it.name.lowercase() }
+        if (lowerCaseFieldNames.contains(parameter.lowercase())) {
+            val field = fields[lowerCaseFieldNames.indexOf(parameter.lowercase())]
             field.isAccessible = true
             val type = StringParser().parseToObject(value, field.type)
             if (type == null) {
@@ -242,7 +242,7 @@ class EditCommand : ICommandHandler {
         @CommandArgument("name", TemplateCommandSuggestionProvider::class) template: ITemplate,
         @CommandArgument("module") module: String
     ) {
-        if (template.getModuleNamesToCopy().map { it.toLowerCase() }.contains(module)) {
+        if (template.getModuleNamesToCopy().map { it.lowercase() }.contains(module)) {
             commandSender.sendProperty(
                 "manager.command.edit.template.modules.add.already-added",
                 module,
@@ -261,7 +261,7 @@ class EditCommand : ICommandHandler {
         @CommandArgument("name", TemplateCommandSuggestionProvider::class) template: ITemplate,
         @CommandArgument("module") module: String
     ) {
-        if (!template.getModuleNamesToCopy().map { it.toLowerCase() }.contains(module)) {
+        if (!template.getModuleNamesToCopy().map { it.lowercase() }.contains(module)) {
             commandSender.sendProperty(
                 "manager.command.edit.template.modules.remove.not-added",
                 module,

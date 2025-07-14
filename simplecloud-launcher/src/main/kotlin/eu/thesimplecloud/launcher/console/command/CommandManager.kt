@@ -59,7 +59,7 @@ class CommandManager {
     fun handleCommand(readLine: String, commandSender: ICommandSender) {
         val readLine = if (readLine.trim().equals("cloud", true)) "cloud help" else readLine.trim()
 
-        if (readLine.toLowerCase().startsWith("cloud") && commandSender is ICloudPlayer) {
+        if (readLine.lowercase().startsWith("cloud") && commandSender is ICloudPlayer) {
             if (!commandSender.hasPermission("cloud.command.use").getBlocking()) {
                 commandSender.sendProperty("command.cloud.no-permission")
                 return
@@ -159,7 +159,7 @@ class CommandManager {
                 val pathArray = path.split(" ")
 
                 pathArray.withIndex()
-                    .all { isParameter(it.value) || it.value.toLowerCase() == messageArray[it.index].toLowerCase() }
+                    .all { isParameter(it.value) || it.value.lowercase() == messageArray[it.index].lowercase() }
             }
         }
     }
@@ -175,7 +175,7 @@ class CommandManager {
 
                 messageArray.withIndex().all {
                     val pathValue = pathArray[it.index]
-                    isParameter(pathValue) || it.value.toLowerCase() == pathValue.toLowerCase()
+                    isParameter(pathValue) || it.value.lowercase() == pathValue.lowercase()
                 }
             }
         }
@@ -220,7 +220,7 @@ class CommandManager {
             }
         }
 
-        return suggestions.filter { it.toLowerCase().startsWith(messageArray.last().toLowerCase()) }
+        return suggestions.filter { it.lowercase().startsWith(messageArray.last().lowercase()) }
     }
 
     private fun isParameter(s: String) = s.startsWith("<") && s.endsWith(">")

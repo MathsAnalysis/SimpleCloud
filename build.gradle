@@ -1,3 +1,5 @@
+import org.jetbrains.dokka.gradle.DokkaTask
+
 /*
  * MIT License
  *
@@ -21,9 +23,9 @@
  */
 
 plugins {
-    id 'org.jetbrains.kotlin.jvm' version '1.8.22'
-    id "com.github.johnrengelman.shadow" version "8.1.1"
-    id 'org.jetbrains.dokka' version '0.10.1'
+    id("org.jetbrains.kotlin.jvm") version "2.2.20-Beta1"
+    id("org.jetbrains.dokka") version "2.0.0"
+    id("com.gradleup.shadow") version "9.0.0-rc1"
 }
 
 allprojects {
@@ -97,6 +99,8 @@ allprojects {
     }
 
     buildscript {
+        ext.kotlin_version = '2.2.0'
+
         repositories {
             mavenLocal()
         }
@@ -110,10 +114,10 @@ subprojects {
     apply plugin: 'maven-publish'
     apply plugin: 'org.jetbrains.kotlin.jvm'
     apply plugin: 'org.jetbrains.dokka'
-    apply plugin: "com.github.johnrengelman.shadow"
+    apply plugin: 'com.gradleup.shadow'
 
-    sourceCompatibility = 8
-    targetCompatibility = 8
+    sourceCompatibility = JavaVersion.VERSION_23
+    targetCompatibility = JavaVersion.VERSION_23
 
     tasks.register('sourcesJar', Jar) {
         dependsOn classes
@@ -144,10 +148,11 @@ subprojects {
     }
 
     compileKotlin {
-        kotlinOptions.jvmTarget = "1.8"
+        kotlinOptions.jvmTarget = "23"
     }
+
     compileTestKotlin {
-        kotlinOptions.jvmTarget = "1.8"
+        kotlinOptions.jvmTarget = "23"
     }
 
     jar {
@@ -181,8 +186,7 @@ subprojects {
         }
     }
 
-    dokka {
-        outputFormat = 'html'
-        outputDirectory = "$buildDir/dokka"
+    tasks.withType(DokkaTask).configureEach {
+        outputDirectory.set(file("$buildDir/dokka"))
     }
 }

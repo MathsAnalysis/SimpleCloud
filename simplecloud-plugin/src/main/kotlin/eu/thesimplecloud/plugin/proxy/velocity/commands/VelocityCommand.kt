@@ -46,7 +46,7 @@ class VelocityCommand(private val commandStart: String) : RawCommand {
         val command = "$commandStart " + invocation.arguments()
 
         if (CloudVelocityPlugin.instance.synchronizedIngameCommandsProperty.getValue()
-                .contains(commandStart.toLowerCase())
+                .contains(commandStart.lowercase())
         ) {
             CloudPlugin.instance.connectionToManager.sendUnitQuery(
                 PacketOutPlayerExecuteCommand(

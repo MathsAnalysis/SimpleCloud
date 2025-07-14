@@ -206,7 +206,7 @@ class SetupManager(val launcher: Launcher) {
         val suggestions = currentQuestion!!.setupQuestion.answerProvider.java.newInstance()
             .getSuggestions(consoleSender)
 
-        return suggestions.filter { it.toLowerCase().startsWith(userInput.toLowerCase()) }
+        return suggestions.filter { it.lowercase().startsWith(userInput.lowercase()) }
     }
 
 

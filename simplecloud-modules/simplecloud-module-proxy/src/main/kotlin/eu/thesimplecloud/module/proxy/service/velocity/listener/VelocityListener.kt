@@ -29,7 +29,7 @@ import com.velocitypowered.api.event.player.ServerPreConnectEvent
 import com.velocitypowered.api.event.proxy.ProxyPingEvent
 import com.velocitypowered.api.proxy.server.ServerPing
 import com.velocitypowered.api.proxy.server.ServerPing.SamplePlayer
-import eu.thesimplecloud.module.proxy.extensions.mapToLowerCase
+import eu.thesimplecloud.module.proxy.extensions.maplowercase
 import eu.thesimplecloud.module.proxy.service.ProxyHandler
 import eu.thesimplecloud.module.proxy.service.velocity.VelocityPluginMain
 import eu.thesimplecloud.plugin.startup.CloudPlugin
@@ -53,7 +53,7 @@ class VelocityListener(val plugin: VelocityPluginMain) {
 
         if (CloudPlugin.instance.thisService().getServiceGroup().isInMaintenance()) {
             if (!player.hasPermission(ProxyHandler.JOIN_MAINTENANCE_PERMISSION) &&
-                !proxyConfiguration.whitelist.mapToLowerCase().contains(player.username.toLowerCase())
+                !proxyConfiguration.whitelist.maplowercase().contains(player.username.lowercase())
             ) {
                 player.disconnect(ProxyHandler.getHexColorComponent(ProxyHandler.replaceString(config.maintenanceKickMessage)))
                 event.result = ServerPreConnectEvent.ServerResult.denied()
@@ -70,7 +70,7 @@ class VelocityListener(val plugin: VelocityPluginMain) {
             return
 
         if (player.hasPermission(ProxyHandler.JOIN_FULL_PERMISSION) &&
-            proxyConfiguration.whitelist.mapToLowerCase().contains(player.username.toLowerCase())
+            proxyConfiguration.whitelist.maplowercase().contains(player.username.lowercase())
         )
             return
 

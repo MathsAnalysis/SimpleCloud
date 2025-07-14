@@ -22,7 +22,7 @@
 
 package eu.thesimplecloud.module.proxy.service.bungee.listener
 
-import eu.thesimplecloud.module.proxy.extensions.mapToLowerCase
+import eu.thesimplecloud.module.proxy.extensions.maplowercase
 import eu.thesimplecloud.module.proxy.service.ProxyHandler
 import eu.thesimplecloud.module.proxy.service.bungee.BungeePluginMain
 import eu.thesimplecloud.plugin.proxy.bungee.toBaseComponent
@@ -55,7 +55,7 @@ class BungeeListener(private val plugin: BungeePluginMain) : Listener {
 
         if (CloudPlugin.instance.thisService().getServiceGroup().isInMaintenance()) {
             if (!player.hasPermission(ProxyHandler.JOIN_MAINTENANCE_PERMISSION) &&
-                !proxyConfiguration.whitelist.mapToLowerCase().contains(player.name.lowercase())
+                !proxyConfiguration.whitelist.maplowercase().contains(player.name.lowercase())
             ) {
                 player.disconnect(
                     ProxyHandler.getHexColorComponent(ProxyHandler.replaceString(config.maintenanceKickMessage))
@@ -71,7 +71,7 @@ class BungeeListener(private val plugin: BungeePluginMain) : Listener {
 
         if (ProxyHandler.getOnlinePlayers() > maxPlayers) {
             if (!player.hasPermission(ProxyHandler.JOIN_FULL_PERMISSION) &&
-                !proxyConfiguration.whitelist.mapToLowerCase().contains(player.name.lowercase())
+                !proxyConfiguration.whitelist.maplowercase().contains(player.name.lowercase())
             ) {
                 player.disconnect(
                     ProxyHandler.getHexColorComponent(ProxyHandler.replaceString(config.fullProxyKickMessage))
