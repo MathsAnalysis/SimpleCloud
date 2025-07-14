@@ -126,7 +126,7 @@ class PluginUpdater(
             return@withContext emptyList()
         }
 
-        val json = JSONObject(response.body?.string() ?: return@withContext emptyList())
+        val json = JSONObject(response.body.string())
         val assets = json.getJSONArray("assets")
         val version = json.getString("tag_name")
 
@@ -390,7 +390,7 @@ class PluginUpdater(
                 return@withContext false
             }
 
-            response.body?.use { body ->
+            response.body.use { body ->
                 targetFile.outputStream().use { output ->
                     body.byteStream().use { input ->
                         val bytes = input.copyTo(output)

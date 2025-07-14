@@ -37,7 +37,7 @@ class JarManager(
             return@withContext false
         }
 
-        response.body?.use { body ->
+        response.body.use { body ->
             targetFile.outputStream().use { output ->
                 body.byteStream().use { input ->
                     val bytes = input.copyTo(output)

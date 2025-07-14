@@ -1,104 +1,177 @@
 package eu.thesimplecloud.module.updater.config
 
+import eu.thesimplecloud.jsonlib.JsonLib
+import eu.thesimplecloud.module.updater.updater.PluginUpdater.PluginConfig
+import eu.thesimplecloud.module.updater.updater.PluginUpdater.PluginPlatform
+import java.io.File
+
 data class UpdaterConfig(
     val enabled: Boolean = true,
+    val updateServerJars: Boolean = true,
+    val updatePlugins: Boolean = true,
     val updateIntervalHours: Int = 24,
-    val updateOnStart: Boolean = true,
-    val serverJars: ServerJarsConfig = ServerJarsConfig(),
-    val plugins: PluginsConfig = PluginsConfig()
+    val syncPluginsToTemplates: Boolean = true,
+    val serverVersions: ServerVersionsConfig = ServerVersionsConfig(),
+    val plugins: List<PluginConfig> = getDefaultPlugins()
 ) {
-    data class ServerJarsConfig(
-        val enabled: Boolean = true,
+    data class ServerVersionsConfig(
         val updateLeaf: Boolean = true,
         val updatePaper: Boolean = true,
         val updateVelocity: Boolean = true,
         val updateVelocityCtd: Boolean = true,
+        val leafVersion: String = "latest",
         val paperVersion: String = "1.21.4",
-        val velocityVersion: String = "3.4.0-SNAPSHOT"
+        val velocityVersion: String = "3.4.0-SNAPSHOT",
+        val velocityCtdVersion: String = "latest"
     )
 
-    data class PluginsConfig(
-        val enabled: Boolean = true,
-        val syncToTemplates: Boolean = true,
-        val items: List<PluginItem> = getDefaultPlugins()
-    )
-
-    data class PluginItem(
-        val name: String,
-        val enabled: Boolean = true,
-        val platform: PluginPlatform,
-        val source: PluginSource,
-        val fileName: String? = null
-    )
-
-    enum class PluginPlatform {
-        BUKKIT, VELOCITY, UNIVERSAL
-    }
-
-    data class PluginSource(
-        val type: SourceType,
-        val value: String
-    )
-
-    enum class SourceType {
-        GITHUB, HANGAR, MODRINTH, JENKINS, DIRECT_URL, OFFICIAL_API
+    fun save(file: File) {
+        file.parentFile.mkdirs()
+        JsonLib.fromObject(this).saveAsFile(file)
     }
 
     companion object {
-        fun getDefaultPlugins(): List<PluginItem> = listOf(
-            PluginItem(
-                name = "LuckPerms-Bukkit",
-                platform = PluginPlatform.BUKKIT,
-                source = PluginSource(SourceType.OFFICIAL_API, "luckperms"),
+        fun fromFile(file: File): UpdaterConfig {
+            val loadedConfig = JsonLib.fromJsonFile(file)?.getObject(UpdaterConfig::class.java)
+
+            return if (loadedConfig != null) {
+                val defaultPlugins = getDefaultPlugins()
+                val mergedPlugins = loadedConfig.plugins.map { loadedPlugin ->
+                    val defaultPlugin = defaultPlugins.find { it.name == loadedPlugin.name }
+
+                    if (defaultPlugin != null) {
+                        PluginConfig(
+                            name = loadedPlugin.name,
+                            enabled = loadedPlugin.enabled,
+                            platforms = defaultPlugin.platforms,
+                            downloadUrl = defaultPlugin.downloadUrl,
+                            githubRepo = defaultPlugin.githubRepo,
+                            spigotResourceId = defaultPlugin.spigotResourceId,
+                            hangarSlug = defaultPlugin.hangarSlug,
+                            modrinthId = defaultPlugin.modrinthId,
+                            customUrl = defaultPlugin.customUrl,
+                            fileName = defaultPlugin.fileName
+                        )
+                    } else {
+                        loadedPlugin
+                    }
+                }
+
+                loadedConfig.copy(plugins = mergedPlugins)
+            } else {
+                createDefault()
+            }
+        }
+
+        fun createDefault(): UpdaterConfig {
+            return UpdaterConfig()
+        }
+
+        fun getDefaultPlugins(): List<PluginConfig> = listOf(
+            PluginConfig(
+                name = "LuckPerms",
+                enabled = true,
+                platforms = listOf(PluginPlatform.BUKKIT),
+                customUrl = "https://download.luckperms.net/1594/bukkit/loader/LuckPerms-Bukkit-5.5.9.jar",
                 fileName = "LuckPerms-Bukkit.jar"
             ),
-            PluginItem(
+            PluginConfig(
                 name = "LuckPerms-Velocity",
-                platform = PluginPlatform.VELOCITY,
-                source = PluginSource(SourceType.OFFICIAL_API, "luckperms"),
+                enabled = true,
+                platforms = listOf(PluginPlatform.VELOCITY),
+                customUrl = "https://download.luckperms.net/1594/velocity/LuckPerms-Velocity-5.5.9.jar",
                 fileName = "LuckPerms-Velocity.jar"
             ),
-            PluginItem(
-                name = "spark-bukkit",
-                platform = PluginPlatform.BUKKIT,
-                source = PluginSource(SourceType.OFFICIAL_API, "spark"),
+            PluginConfig(
+                name = "Spark",
+                enabled = true,
+                platforms = listOf(PluginPlatform.BUKKIT),
+                customUrl = "https://ci.lucko.me/job/spark/lastSuccessfulBuild/artifact/spark-bukkit/build/libs/spark-1.10.140-bukkit.jar",
                 fileName = "spark-bukkit.jar"
             ),
-            PluginItem(
-                name = "spark-velocity",
-                platform = PluginPlatform.VELOCITY,
-                source = PluginSource(SourceType.OFFICIAL_API, "spark"),
+            PluginConfig(
+                name = "Spark-Velocity",
+                enabled = true,
+                platforms = listOf(PluginPlatform.VELOCITY),
+                customUrl = "https://ci.lucko.me/job/spark/lastSuccessfulBuild/artifact/spark-velocity/build/libs/spark-1.10.140-velocity.jar",
                 fileName = "spark-velocity.jar"
             ),
-            PluginItem(
-                name = "ViaVersion",
-                platform = PluginPlatform.BUKKIT,
-                source = PluginSource(SourceType.HANGAR, "ViaVersion/ViaVersion"),
-                fileName = "ViaVersion.jar"
-            ),
-            PluginItem(
+            PluginConfig(
                 name = "Vault",
-                platform = PluginPlatform.BUKKIT,
-                source = PluginSource(SourceType.GITHUB, "MilkBowl/Vault"),
+                enabled = true,
+                platforms = listOf(PluginPlatform.BUKKIT),
+                githubRepo = "MilkBowl/Vault",
                 fileName = "Vault.jar"
             ),
-            PluginItem(
+            PluginConfig(
                 name = "PlaceholderAPI",
-                platform = PluginPlatform.BUKKIT,
-                source = PluginSource(SourceType.GITHUB, "PlaceholderAPI/PlaceholderAPI"),
+                enabled = true,
+                platforms = listOf(PluginPlatform.BUKKIT),
+                customUrl = "https://ci.extendedclip.com/job/PlaceholderAPI/lastSuccessfulBuild/artifact/build/libs/PlaceholderAPI-2.11.6.jar",
                 fileName = "PlaceholderAPI.jar"
             ),
-            PluginItem(
+            PluginConfig(
+                name = "ProtocolLib",
+                enabled = false,
+                platforms = listOf(PluginPlatform.BUKKIT),
+                customUrl = "https://ci.dmulloy2.net/job/ProtocolLib/lastSuccessfulBuild/artifact/build/libs/ProtocolLib.jar",
+                fileName = "ProtocolLib.jar"
+            ),
+            PluginConfig(
+                name = "ViaVersion",
+                enabled = true,
+                platforms = listOf(PluginPlatform.BUKKIT),
+                hangarSlug = "ViaVersion/ViaVersion",
+                fileName = "ViaVersion.jar"
+            ),
+            PluginConfig(
+                name = "ViaBackwards",
+                enabled = false,
+                platforms = listOf(PluginPlatform.BUKKIT),
+                hangarSlug = "ViaVersion/ViaBackwards",
+                fileName = "ViaBackwards.jar"
+            ),
+            PluginConfig(
+                name = "VelocityVanish",
+                enabled = false,
+                platforms = listOf(PluginPlatform.VELOCITY),
+                githubRepo = "LooFifteen/VelocityVanish",
+                fileName = "VelocityVanish.jar"
+            ),
+            PluginConfig(
+                name = "SignedVelocity",
+                enabled = false,
+                platforms = listOf(PluginPlatform.VELOCITY),
+                modrinthId = "signedvelocity",
+                fileName = "SignedVelocity.jar"
+            ),
+            PluginConfig(
                 name = "Geyser-Spigot",
-                platform = PluginPlatform.BUKKIT,
-                source = PluginSource(SourceType.DIRECT_URL, "https://download.geysermc.org/v2/projects/geyser/versions/latest/builds/latest/downloads/spigot"),
+                enabled = false,
+                platforms = listOf(PluginPlatform.BUKKIT),
+                customUrl = "https://download.geysermc.org/v2/projects/geyser/versions/latest/builds/latest/downloads/spigot",
                 fileName = "Geyser-Spigot.jar"
             ),
-            PluginItem(
+            PluginConfig(
                 name = "Geyser-Velocity",
-                platform = PluginPlatform.VELOCITY,
-                source = PluginSource(SourceType.DIRECT_URL, "https://download.geysermc.org/v2/projects/geyser/versions/latest/builds/latest/downloads/velocity"),
+                enabled = true,
+                platforms = listOf(PluginPlatform.VELOCITY),
+                customUrl = "https://download.geysermc.org/v2/projects/geyser/versions/latest/builds/latest/downloads/velocity",
                 fileName = "Geyser-Velocity.jar"
+            ),
+            PluginConfig(
+                name = "Floodgate-Spigot",
+                enabled = false,
+                platforms = listOf(PluginPlatform.BUKKIT),
+                customUrl = "https://download.geysermc.org/v2/projects/floodgate/versions/latest/builds/latest/downloads/spigot",
+                fileName = "Floodgate-Spigot.jar"
+            ),
+            PluginConfig(
+                name = "Floodgate-Velocity",
+                enabled = true,
+                platforms = listOf(PluginPlatform.VELOCITY),
+                customUrl = "https://download.geysermc.org/v2/projects/floodgate/versions/latest/builds/latest/downloads/velocity",
+                fileName = "Floodgate-Velocity.jar"
             )
         )
     }
