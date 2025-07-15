@@ -1,5 +1,6 @@
 package eu.thesimplecloud.module.updater.updater
 
+import eu.thesimplecloud.api.CloudAPI
 import eu.thesimplecloud.api.directorypaths.DirectoryPaths
 import eu.thesimplecloud.module.updater.manager.JarManager
 import kotlinx.coroutines.*
@@ -307,45 +308,40 @@ class ServerVersionUpdater(
     }
 
     private fun getTemplateServerType(templateDir: File): String? {
-        val configFile = File(templateDir.parentFile.parentFile, "groups/${templateDir.name}.json")
-        if (!configFile.exists()) {
-            // Fallback: check for existing jars in the template
-            templateDir.listFiles()?.forEach { file ->
-                when {
-                    file.name.startsWith("LEAF_") || file.name.lowercase().contains("leaf") -> {
-                        println("[ServerVersionUpdater] Found existing Leaf jar in template: ${templateDir.name}")
-                        return "LEAF_"
-                    }
+        val templateName = templateDir.name
+        val serviceGroup = CloudAPI.instance.getCloudServiceGroupManager()
+            .getAllCachedObjects()
+            .find { it.getTemplateName() == templateName }
 
-                    file.name.startsWith("PAPER_") || file.name.lowercase().contains("paper") -> {
-                        println("[ServerVersionUpdater] Found existing Paper jar in template: ${templateDir.name}")
-                        return "PAPER_"
-                    }
+        if (serviceGroup != null) {
+            val serviceVersion = serviceGroup.getServiceVersion()
+            return when {
+                serviceVersion.name.startsWith("VELOCITYCTD_") -> "VELOCITYCTD_"
+                serviceVersion.name.startsWith("VELOCITY_") -> "VELOCITY_"
+                serviceVersion.name.startsWith("LEAF_") -> "LEAF_"
+                serviceVersion.name.startsWith("PAPER_") -> "PAPER_"
+                else -> null
+            }
+        }
 
-                    file.name.startsWith("VELOCITYCTD_") -> {
-                        println("[ServerVersionUpdater] Found existing VelocityCTD jar in template: ${templateDir.name}")
-                        return "VELOCITYCTD_"
-                    }
-
-                    file.name.startsWith("VELOCITY_") || file.name.lowercase().contains("velocity") -> {
-                        println("[ServerVersionUpdater] Found existing Velocity jar in template: ${templateDir.name}")
-                        return "VELOCITY_"
-                    }
+        templateDir.listFiles()?.forEach { file ->
+            when {
+                file.name.startsWith("LEAF_") || file.name.lowercase().contains("leaf") -> {
+                    return "LEAF_"
+                }
+                file.name.startsWith("PAPER_") || file.name.lowercase().contains("paper") -> {
+                    return "PAPER_"
+                }
+                file.name.startsWith("VELOCITYCTD_") -> {
+                    return "VELOCITYCTD_"
+                }
+                file.name.startsWith("VELOCITY_") || file.name.lowercase().contains("velocity") -> {
+                    return "VELOCITY_"
                 }
             }
-
-            println("[ServerVersionUpdater] Could not determine server type for template: ${templateDir.name}")
-            return null
         }
 
-        val content = configFile.readText()
-        return when {
-            content.contains("VELOCITYCTD") -> "VELOCITYCTD_"
-            content.contains("VELOCITY") -> "VELOCITY_"
-            content.contains("LEAF") -> "LEAF_"
-            content.contains("PAPER") -> "PAPER_"
-            else -> null
-        }
+        return null
     }
 
     fun shutdown() {

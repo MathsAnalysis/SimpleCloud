@@ -21,39 +21,47 @@
  */
 
 dependencies {
-    testApi "io.mockk:mockk:1.13.5"
-    compileOnly group: 'org.jline', name: 'jline', version: '3.23.0'
-    compileOnly group: 'org.reflections', name: 'reflections', version: '0.10.2'
-    compileOnly group: 'com.google.code.gson', name: 'gson', version: '2.10.1'
     compileOnly(project(":simplecloud-dependency-loader"))
+
+    testApi "io.mockk:mockk:1.14.4"
+
+    compileOnly group: 'org.jline', name: 'jline', version: '3.30.4'
+    compileOnly group: 'org.reflections', name: 'reflections', version: '0.10.2'
+    compileOnly group: 'com.google.code.gson', name: 'gson', version: '2.13.1'
+
     testApi(project(":simplecloud-dependency-loader"))
     compileOnly(project(":simplecloud-runner"))
+
     testApi(project(":simplecloud-runner"))
     api(project(":simplecloud-api")) {
         transitive = false
     }
-    compileOnly("com.github.ajalt:clikt:2.8.0")
+
+
+    compileOnly 'com.github.ajalt.clikt:clikt:5.0.3'
+
     compileOnly group: 'org.jetbrains.kotlinx', name: 'kotlinx-coroutines-core', version: dependencyKotlinCouroutinesVersion
-    compileOnly group: 'org.fusesource.jansi', name: 'jansi', version: '2.4.1'
+    compileOnly group: 'org.fusesource.jansi', name: 'jansi', version: '2.4.2'
 
     compileOnly(group: 'eu.thesimplecloud.clientserverapi', name: 'clientserverapi', version: depedencyClientServerAPIVersion) {
         transitive = false
     }
+
     compileOnly(group: 'eu.thesimplecloud.jsonlib', name: 'json-lib', version: "1.0.8")
 
-    compileOnly 'org.eclipse.aether:aether-impl:1.1.0'
-    compileOnly 'org.eclipse.aether:aether-connector-basic:1.1.0'
-    compileOnly 'org.eclipse.aether:aether-transport-file:1.1.0'
-    compileOnly 'org.eclipse.aether:aether-transport-http:1.1.0'
-    compileOnly 'org.apache.maven:maven-aether-provider:3.3.9'
+    compileOnly 'org.apache.maven.resolver:maven-resolver-impl:2.0.10'
+    compileOnly 'org.apache.maven.resolver:maven-resolver-connector-basic:2.0.10'
+    compileOnly 'org.apache.maven.resolver:maven-resolver-transport-file:2.0.10'
+    compileOnly 'org.apache.maven:maven-resolver-provider:4.0.0-rc-4'
+    compileOnly 'org.apache.maven.resolver:maven-resolver-transport-http:2.0.0-alpha-2'
 
     testApi group: 'commons-io', name: 'commons-io', version: dependencyCommonsIOVersion
     testApi group: 'com.google.guava', name: 'guava', version: dependencyGuavaVersion
     testApi group: 'io.netty', name: 'netty-all', version: dependencyNettyVersion
     testApi group: 'org.jetbrains.kotlinx', name: 'kotlinx-coroutines-core', version: dependencyKotlinCouroutinesVersion
-    testApi group: 'com.google.code.gson', name: 'gson', version: '2.10.1'
-    testApi group: 'org.apache.commons', name: 'commons-lang3', version: '3.13.0'
 
+    testApi 'org.apache.commons:commons-lang3:3.18.0'
+    testApi group: 'com.google.code.gson', name: 'gson', version: '2.13.1'
 }
 
 shadowJar {

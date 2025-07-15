@@ -34,21 +34,27 @@ repositories {
 }
 
 dependencies {
-    testApi group: 'junit', name: 'junit', version: '4.13.1'
-    compileOnly "org.jetbrains.kotlin:kotlin-stdlib-jdk8"
     compileOnly project(":simplecloud-api")
     compileOnly project(":simplecloud-runner")
     compileOnly project(":simplecloud-dependency-loader")
     compileOnly project(":simplecloud-launcher")
+
     api(project(":simplecloud-client")) {
         transitive = false
     }
+
+    compileOnly "org.jetbrains.kotlin:kotlin-stdlib-jdk8"
+
+
     compileOnly group: 'commons-io', name: 'commons-io', version: dependencyCommonsIOVersion
     compileOnly group: 'org.jetbrains.kotlinx', name: 'kotlinx-coroutines-core', version: dependencyKotlinCouroutinesVersion
     compileOnly group: 'org.reflections', name: 'reflections', version: '0.10.2'
     compileOnly group: 'org.litote.kmongo', name: 'kmongo', version: dependencyKMongoVersion
     compileOnly(group: 'io.netty', name: 'netty-all', version: dependencyNettyVersion)
-    compileOnly group: 'org.apache.commons', name: 'commons-lang3', version: '3.13.0'
+
+    compileOnly group: 'org.apache.commons', name: 'commons-lang3', version: '3.18.0'
+
+    testApi group: 'org.junit.jupiter', name: 'junit-jupiter-api', version: '6.0.0-M1'
 }
 
 compileKotlin {

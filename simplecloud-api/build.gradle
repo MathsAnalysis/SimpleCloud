@@ -21,19 +21,23 @@
  */
 
 dependencies {
-    testApi group: 'io.netty', name: 'netty-all', version: dependencyNettyVersion
-    testImplementation group: 'org.mockito', name: 'mockito-core', version: '5.14.0'
-    compileOnly group: 'com.fasterxml.jackson.core', name: 'jackson-databind', version: '2.12.6.1'
     compileOnly(project(":simplecloud-runner"))
+
+    testApi group: 'io.netty', name: 'netty-all', version: dependencyNettyVersion
+    testImplementation group: 'org.mockito', name: 'mockito-core', version: '5.18.0'
+
+    compileOnly group: 'org.mockito', name: 'mockito-core', version: '5.18.0'
 
     testApi group: 'commons-io', name: 'commons-io', version: dependencyCommonsIOVersion
     testApi group: 'com.google.guava', name: 'guava', version: dependencyGuavaVersion
     testApi group: 'io.netty', name: 'netty-all', version: dependencyNettyVersion
     testApi group: 'org.jetbrains.kotlinx', name: 'kotlinx-coroutines-core', version: dependencyKotlinCouroutinesVersion
-    api group: 'com.google.code.gson', name: 'gson', version: '2.10.1'
+
     api(group: 'eu.thesimplecloud.clientserverapi', name: 'clientserverapi', version: depedencyClientServerAPIVersion)
     api(group: 'io.netty', name: 'netty-all', version: dependencyNettyVersion)
-    api("net.kyori:adventure-api:4.14.0")
-    api("net.kyori:adventure-text-serializer-gson:4.14.0")
+
+    api('net.kyori:adventure-api:4.22.0')
+    api('net.kyori:adventure-text-serializer-gson:4.22.0')
+    api (group: 'com.google.code.gson', name: 'gson', version: '2.13.1')
 
 }

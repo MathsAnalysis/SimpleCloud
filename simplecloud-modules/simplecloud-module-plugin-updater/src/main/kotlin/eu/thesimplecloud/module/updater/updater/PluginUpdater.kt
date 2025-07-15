@@ -59,7 +59,7 @@ class PluginUpdater(
             results[plugin.name] = updatePlugin(plugin)
         }
 
-        syncPluginsToTemplates()
+        //syncPluginsToTemplates()
 
         println("[PluginUpdater] === PLUGIN UPDATES COMPLETED ===")
         results

@@ -29,21 +29,37 @@ repositories {
 }
 
 dependencies {
-    compileOnly "org.jetbrains.kotlin:kotlin-stdlib"
-    testApi group: 'junit', name: 'junit', version: '4.12'
-    compileOnly 'io.javalin:javalin:3.13.7'
-    compileOnly 'com.auth0:java-jwt:3.16.0'
-    compileOnly 'com.github.kmehrunes:javalin-jwt:v0.2'
-    compileOnly 'org.slf4j:slf4j-simple:1.7.36'
-    compileOnly "org.slf4j:slf4j-api:1.8.0-beta4"
     compileOnly(project(":simplecloud-api"))
+
     compileOnly(project(":simplecloud-launcher")) {
         transitive = false
     }
+
     compileOnly(project(":simplecloud-base")) {
         transitive = false
     }
-    // https://mvnrepository.com/artifact/org.apache.commons/commons-lang3
-    compileOnly group: 'org.apache.commons', name: 'commons-lang3', version: '3.13.0'
+
+    compileOnly(project(":simplecloud-client")) {
+        transitive = false
+    }
+
+    compileOnly "org.jetbrains.kotlin:kotlin-stdlib"
+
+    compileOnly ('io.javalin:javalin:6.7.0'){
+        transitive = false
+    }
+
+
+    compileOnly 'com.auth0:java-jwt:4.5.0'
+
+    compileOnly 'org.slf4j:slf4j-simple:2.1.0-alpha1'
+    compileOnly 'org.slf4j:slf4j-api:2.1.0-alpha1'
+
+    compileOnly 'com.github.kmehrunes:javalin-jwt:6.0.0'
+
+    testApi group: 'org.junit.jupiter', name: 'junit-jupiter-api', version: '6.0.0-M1'
+
+
+    compileOnly group: 'org.apache.commons', name: 'commons-lang3', version: '3.18.0'
     compileOnly(group: 'eu.thesimplecloud.clientserverapi', name: 'clientserverapi', version: depedencyClientServerAPIVersion)
 }
