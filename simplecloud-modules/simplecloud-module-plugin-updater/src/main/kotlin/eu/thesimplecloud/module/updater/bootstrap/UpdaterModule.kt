@@ -207,7 +207,7 @@ class UpdaterModule : ICloudModule {
                     val success = registerVersion(prefix, version, latestJar.toURI().toString(), serviceAPIType, isPaperClip)
                     if (success) {
                         println("[UpdaterModule] ✓ Registered: ${latestJar.name}")
-                        return@registerJarVersions 1
+                        return 1
                     } else {
                         println("[UpdaterModule] ✗ Failed to register: ${latestJar.name}")
                     }
