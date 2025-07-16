@@ -97,8 +97,7 @@ class CloudVelocityPlugin @Inject constructor(val proxyServer: ProxyServer) : IC
         synchronizeOnlineCountTask()
         runOfflinePlayerChecker()
 
-        CloudAPI.instance.getEventManager()
-            .registerListener(CloudPlugin.instance, CloudPlayerDisconnectListener(this.proxyServer))
+        CloudAPI.instance.getEventManager().registerListener(CloudPlugin.instance, CloudPlayerDisconnectListener(this.proxyServer))
     }
 
 
@@ -135,22 +134,21 @@ class CloudVelocityPlugin @Inject constructor(val proxyServer: ProxyServer) : IC
     }
 
     private fun runOfflinePlayerChecker() {
-        proxyServer.scheduler.buildTask(this) {
-            val playersOnThisService =
-                CloudAPI.instance.getCloudPlayerManager().getAllCachedObjects()
+        proxyServer.scheduler.buildTask(this, Runnable {
+            val playersOnThisService = CloudAPI.instance.getCloudPlayerManager().getAllCachedObjects()
             val playersOffline = playersOnThisService.filter { proxyServer.getPlayer(it.getUniqueId()) == null }
             playersOffline.forEach { ProxyEventHandler.handleDisconnect(it.getUniqueId(), it.getName()) }
-        }.delay(2L, TimeUnit.SECONDS).repeat(30L, TimeUnit.SECONDS).schedule()
+        }).delay(2L, TimeUnit.SECONDS).repeat(30L, TimeUnit.SECONDS).schedule()
     }
 
     private fun synchronizeOnlineCountTask() {
-        proxyServer.scheduler.buildTask(this) {
+        proxyServer.scheduler.buildTask(this, Runnable {
             val service = CloudPlugin.instance.thisService()
             if (service.getOnlineCount() != proxyServer.playerCount) {
                 service.setOnlineCount(proxyServer.playerCount)
                 service.update()
             }
-        }.repeat(30L, TimeUnit.SECONDS).schedule()
+        }).delay(2L, TimeUnit.SECONDS).repeat(30L, TimeUnit.SECONDS).schedule()
     }
 
     override fun shutdown() {

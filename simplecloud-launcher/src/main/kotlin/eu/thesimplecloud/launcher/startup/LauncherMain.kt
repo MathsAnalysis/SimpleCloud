@@ -22,6 +22,8 @@
 
 package eu.thesimplecloud.launcher.startup
 
+import com.github.ajalt.clikt.core.main
+
 class LauncherMain {
     companion object {
         var specifiedArguments: Array<String>? = null

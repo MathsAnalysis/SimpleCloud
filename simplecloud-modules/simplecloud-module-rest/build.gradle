@@ -55,6 +55,7 @@ dependencies {
     compileOnly 'org.slf4j:slf4j-simple:2.1.0-alpha1'
     compileOnly 'org.slf4j:slf4j-api:2.1.0-alpha1'
 
+    compileOnly 'io.javalin:javalin:6.7.0'
     compileOnly 'com.github.kmehrunes:javalin-jwt:6.0.0'
 
     testApi group: 'org.junit.jupiter', name: 'junit-jupiter-api', version: '6.0.0-M1'

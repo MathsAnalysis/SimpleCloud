@@ -22,6 +22,8 @@
 
 package eu.thesimplecloud.module.rest.auth.controller
 
+import com.auth0.jwt.JWT
+import com.auth0.jwt.interfaces.JWTVerifier
 import eu.thesimplecloud.module.rest.annotation.RequestBody
 import eu.thesimplecloud.module.rest.annotation.RequestMapping
 import eu.thesimplecloud.module.rest.annotation.RequestType
@@ -29,7 +31,6 @@ import eu.thesimplecloud.module.rest.annotation.RestController
 import eu.thesimplecloud.module.rest.auth.AuthService
 import eu.thesimplecloud.module.rest.controller.IController
 import io.javalin.http.Context
-import javalinjwt.examples.JWTResponse
 
 /**
  * Created by IntelliJ IDEA.
@@ -49,7 +50,7 @@ class AuthController(
             context.status(401)
             context.result("Username or password wrong!")
         } else {
-            context.json(JWTResponse(token))
+            context.json(JWT.decode(token))
         }
     }
 

@@ -27,8 +27,8 @@ import eu.thesimplecloud.module.rest.annotation.RequestMapping
 import eu.thesimplecloud.module.rest.annotation.RequestType
 import eu.thesimplecloud.module.rest.annotation.RestController
 import eu.thesimplecloud.module.rest.controller.IController
-import io.javalin.core.util.FileUtil
 import io.javalin.http.Context
+import io.javalin.util.FileUtil
 import java.io.File
 
 /**
@@ -52,7 +52,7 @@ class FileManagerController : IController {
             return directories.union(files).map { FileInfo(it.name, it.isDirectory, it.length()) }
         }
         if (ctx.queryParam("view") == null)
-            ctx.res.setHeader("Content-Disposition", "attachment; filename=${file.name}")
+            ctx.res().setHeader("Content-Disposition", "attachment; filename=${file.name}")
         ctx.result(file.readBytes())
         return emptyList()
     }
@@ -81,7 +81,7 @@ class FileManagerController : IController {
         val uploadedFile = ctx.uploadedFile("file")
 
         if (uploadedFile != null) {
-            FileUtil.streamToFile(uploadedFile.content, file.absolutePath)
+            FileUtil.streamToFile(uploadedFile.content(), file.absolutePath)
         } else {
             Launcher.instance.logger.info(ctx.body())
             if (ctx.body().isNotEmpty()) {
@@ -92,13 +92,13 @@ class FileManagerController : IController {
     }
 
     private fun getFileFromRequest(ctx: Context): File {
-        val filepath = ctx.req.pathInfo.replace("/filemanager/", "")
+        val filepath = ctx.req().pathInfo.replace("/filemanager/", "")
         if (filepath.isBlank()) return File(".")
         return File(filepath)
     }
 
     private fun checkForSuspiciousPath(ctx: Context) {
-        if (ctx.req.pathInfo.contains("..") || ctx.req.pathInfo.contains("//"))
+        if (ctx.req().pathInfo.contains("..") || ctx.req().pathInfo.contains("//"))
             throw InvalidPathException("Invalid file path")
     }
 

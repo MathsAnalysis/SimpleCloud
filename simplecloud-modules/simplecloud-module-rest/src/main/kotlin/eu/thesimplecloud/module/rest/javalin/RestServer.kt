@@ -22,6 +22,8 @@
 
 package eu.thesimplecloud.module.rest.javalin
 
+import com.auth0.jwt.JWT
+import com.auth0.jwt.JWTVerifier
 import eu.thesimplecloud.clientserverapi.lib.json.PacketExclude
 import eu.thesimplecloud.jsonlib.GsonCreator
 import eu.thesimplecloud.module.rest.annotation.WebExclude
@@ -45,10 +47,10 @@ import eu.thesimplecloud.module.rest.defaultcontroller.uptime.UptimeController
 import eu.thesimplecloud.module.rest.defaultcontroller.version.VersionController
 import eu.thesimplecloud.module.rest.defaultcontroller.wrapper.WrapperController
 import io.javalin.Javalin
-import io.javalin.core.security.SecurityUtil
 import io.javalin.http.HandlerType
 import javalinjwt.JWTAccessManager
 import javalinjwt.JavalinJWT
+import javax.management.relation.Role
 
 /**
  * Created by IntelliJ IDEA.
@@ -69,7 +71,9 @@ class RestServer(port: Int) {
     init {
         instance = this
 
-        app.config.accessManager(JWTAccessManager("role", createRolesMapping(), Roles.ANYONE))
+        JWTAccessManager("role", createRolesMapping(), Roles.ANYONE)
+
+
         app.before(JavalinJWT.createHeaderDecodeHandler(JwtProvider.instance.provider))
         app.before { ctx ->
             ctx.header("Access-Control-Allow-Headers", "*")
@@ -78,9 +82,10 @@ class RestServer(port: Int) {
             ctx.header("Content-Type", "application/json; charset=utf-8")
         }
 
+
         app.options("/*", {
             it.status(200)
-        }, SecurityUtil.roles(Roles.ANYONE))
+        }, Roles.ANYONE)
 
         controllerHandler.registerController(AuthController(this.authService))
         controllerHandler.registerController(UserController(this.authService))
@@ -104,14 +109,21 @@ class RestServer(port: Int) {
 
     private fun addToJavalin(requestHandler: JavalinRequestHandler) {
         val requestMethodData = requestHandler.requestMethodData
-        app.addHandler(
-            HandlerType.valueOf(requestMethodData.requestType.name),
-            requestMethodData.path,
-            requestHandler,
-            setOf(Roles.ANYONE)
-        )
-    }
+        val path = requestMethodData.path
 
+        when (requestMethodData.requestType.name.uppercase()) {
+            "GET" -> app.get(path, requestHandler, Roles.ANYONE)
+            "POST" -> app.post(path, requestHandler, Roles.ANYONE)
+            "PUT" -> app.put(path, requestHandler, Roles.ANYONE)
+            "DELETE" -> app.delete(path, requestHandler, Roles.ANYONE)
+            "PATCH" -> app.patch(path, requestHandler, Roles.ANYONE)
+            "HEAD" -> app.head(path, requestHandler, Roles.ANYONE)
+            "OPTIONS" -> app.options(path, requestHandler, Roles.ANYONE)
+            else -> {
+                println("Metodo HTTP non supportato: ${requestMethodData.requestType.name}")
+            }
+        }
+    }
     fun shutdown() {
         app.stop()
     }

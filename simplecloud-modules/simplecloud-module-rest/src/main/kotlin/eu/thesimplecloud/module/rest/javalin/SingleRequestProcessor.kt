@@ -66,7 +66,7 @@ class SingleRequestProcessor(
         }
 
         //then the result was set by the called method
-        if (this.ctx.resultString() != null) {
+        if (this.ctx.result() != null) {
             return
         }
 
@@ -125,7 +125,7 @@ class SingleRequestProcessor(
                     .getObject(parameterData.parameterType)
             }
             is RequestParam -> {
-                val parameter = this.ctx.req.getParameter(annotation.parameterName) ?: return null
+                val parameter = this.ctx.req().getParameter(annotation.parameterName) ?: return null
                 return JsonLib.fromJsonString(parameter).getObject(parameterData.parameterType)
             }
             is RequestPathParam -> {

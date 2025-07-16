@@ -4,11 +4,13 @@ dependencies {
 
     api "org.jetbrains.kotlin:kotlin-stdlib-jdk8"
 
-    compileOnly 'org.apache.maven.resolver:maven-resolver-impl:2.0.10'
-    compileOnly 'org.apache.maven.resolver:maven-resolver-connector-basic:2.0.10'
-    compileOnly 'org.apache.maven.resolver:maven-resolver-transport-file:2.0.10'
-    compileOnly 'org.apache.maven:maven-resolver-provider:4.0.0-rc-4'
-    compileOnly 'org.apache.maven.resolver:maven-resolver-transport-http:2.0.0-alpha-2'
+    def mavenResolverVersion = '1.9.18'
+    implementation "org.apache.maven.resolver:maven-resolver-api:$mavenResolverVersion"
+    implementation "org.apache.maven.resolver:maven-resolver-impl:$mavenResolverVersion"
+    implementation "org.apache.maven.resolver:maven-resolver-connector-basic:$mavenResolverVersion"
+    implementation "org.apache.maven.resolver:maven-resolver-transport-file:$mavenResolverVersion"
+    implementation "org.apache.maven.resolver:maven-resolver-transport-http:$mavenResolverVersion"
+    implementation 'org.apache.maven:maven-resolver-provider:3.9.6'
 }
 
 shadowJar {
