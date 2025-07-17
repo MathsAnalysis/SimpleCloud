@@ -14,10 +14,6 @@ include 'simplecloud-dependency-loader'
 include 'simplecloud-modules:simplecloud-module-internalwrapper'
 findProject(':simplecloud-modules:simplecloud-module-internalwrapper')?.name = 'simplecloud-module-internalwrapper'
 
-// Include the update module
-include 'simplecloud-modules:simplecloud-module-plugin-updater'
-findProject(':simplecloud-modules:simplecloud-module-plugin-updater')?.name = 'simplecloud-module-plugin-updater'
-
 // Include the notify module
 include 'simplecloud-modules:simplecloud-module-notify'
 findProject(':simplecloud-modules:simplecloud-module-notify')?.name = 'simplecloud-module-notify'
