@@ -64,8 +64,7 @@ class ServiceDirectory(private val cloudService: ICloudService) {
             return
         }
 
-        val loadedServiceVersion =
-            Wrapper.instance.serviceVersionLoader.loadVersionFile(this.cloudService.getServiceVersion())
+        val loadedServiceVersion = Wrapper.instance.serviceVersionLoader.loadVersionFile(this.cloudService.getServiceVersion())
         loadedServiceVersion.copyToDirectory(this.serviceTmpDirectory)
         renameExecutableJar(loadedServiceVersion)
     }
